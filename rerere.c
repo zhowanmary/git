@@ -617,7 +617,7 @@ static int try_merge(struct index_state *istate,
 
 	if (read_mmfile(&base, rerere_path(id, "preimage")) ||
 	    read_mmfile(&other, rerere_path(id, "postimage"))) {
-		ret = LL_MERGE_CONFLICT;
+		ret = LL_MERGE_ERROR;
 	} else {
 		/*
 		 * A three-way merge. Note that this honors user-customizable
