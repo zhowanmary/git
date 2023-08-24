@@ -390,12 +390,8 @@ static int handle_conflict(struct strbuf *out, struct rerere_io *io,
 			strbuf_addbuf(out, &two);
 			rerere_strbuf_putconflict(out, '>', marker_size);
 			if (ctx) {
-				the_hash_algo->update_fn(ctx, one.buf ?
-							 one.buf : "",
-							 one.len + 1);
-				the_hash_algo->update_fn(ctx, two.buf ?
-							 two.buf : "",
-							 two.len + 1);
+				the_hash_algo->update_fn(ctx, one.buf, one.len + 1);
+				the_hash_algo->update_fn(ctx, two.buf, two.len + 1);
 			}
 			break;
 		} else if (hunk == RR_SIDE_1)
