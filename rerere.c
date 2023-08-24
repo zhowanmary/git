@@ -454,7 +454,7 @@ static int handle_path(unsigned char *hash, struct rerere_io *io, int marker_siz
 
 /*
  * Scan the path for conflicts, do the "handle_path()" thing above, and
- * return the number of conflict hunks found.
+ * return true iff conflict hunks were found.
  */
 static int handle_file(struct index_state *istate,
 		       const char *path, unsigned char *hash, const char *output)
