@@ -265,7 +265,7 @@ typedef struct {
 		low = hash & ((1U<<g->bits) - 1); \
 		h = &g->sub[low]; \
 		ret = prefix##_sub_getp_core(h, key, hash); \
-		if (ret == 1U<<h->bits) r.sub = low, r.pos = (khint_t)-1; \
+		if (ret >= kh_end(h)) r.sub = low, r.pos = (khint_t)-1; \
 		else r.sub = low, r.pos = ret; \
 		return r; \
 	} \
