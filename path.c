@@ -776,6 +776,7 @@ const char *enter_repo(const char *path, int strict)
 		if (!suffix[i])
 			return NULL;
 		gitfile = read_gitfile(used_path.buf);
+		die_upon_dubious_ownership(gitfile, NULL, used_path.buf);
 		if (gitfile) {
 			strbuf_reset(&used_path);
 			strbuf_addstr(&used_path, gitfile);
@@ -786,6 +787,7 @@ const char *enter_repo(const char *path, int strict)
 	}
 	else {
 		const char *gitfile = read_gitfile(path);
+		die_upon_dubious_ownership(gitfile, NULL, path);
 		if (gitfile)
 			path = gitfile;
 		if (chdir(path))
