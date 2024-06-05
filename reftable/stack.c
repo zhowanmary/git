@@ -278,8 +278,10 @@ static int reftable_stack_reload_once(struct reftable_stack *st, char **names,
 
 	new_tables = NULL;
 	st->readers_len = new_readers_len;
-	if (st->merged)
+	if (st->merged) {
+		merged_table_release(st->merged);
 		reftable_merged_table_free(st->merged);
+	}
 	if (st->readers) {
 		reftable_free(st->readers);
 	}
@@ -985,8 +987,10 @@ static int stack_write_compact(struct reftable_stack *st,
 
 done:
 	reftable_iterator_destroy(&it);
-	if (mt)
+	if (mt) {
+		merged_table_release(mt);
 		reftable_merged_table_free(mt);
+	}
 	reftable_ref_record_release(&ref);
 	reftable_log_record_release(&log);
 	st->stats.entries_written += entries;

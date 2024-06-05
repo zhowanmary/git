@@ -148,8 +148,7 @@ void repo_set_compat_hash_algo(struct repository *repo, int algo)
 		repo_read_loose_object_map(repo);
 }
 
-void repo_set_ref_storage_format(struct repository *repo,
-				 enum ref_storage_format format)
+void repo_set_ref_storage_format(struct repository *repo, unsigned int format)
 {
 	repo->ref_storage_format = format;
 }
