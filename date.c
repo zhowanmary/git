@@ -870,7 +870,7 @@ static int match_object_header_date(const char *date, timestamp_t *timestamp, in
 
 
 /* timestamp of 2099-12-31T23:59:59Z, including 32 leap days */
-static const time_t timestamp_max = ((2100L - 1970) * 365 + 32) * 24 * 60 * 60 - 1;
+static const timestamp_t timestamp_max = (((timestamp_t)2100 - 1970) * 365 + 32) * 24 * 60 * 60 - 1;
 
 /* Gr. strptime is crap for this; it doesn't have a way to require RFC2822
    (i.e. English) day/month names, and it doesn't work correctly with %z. */
