@@ -788,7 +788,9 @@ static enum parse_opt_result stdin_cacheinfo_callback(
 		return error("option '%s' must be the last argument", opt->long_name);
 	allow_add = allow_replace = allow_remove = 1;
 	ret = read_index_info(*nul_term_line, apply_index_info, NULL);
-	if (ret)
+	if (ret == INDEX_INFO_EMPTY_LINE)
+		return error("malformed input line ''");
+	else if (ret < 0)
 		return -1;
 
 	return 0;

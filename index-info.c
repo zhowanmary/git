@@ -22,6 +22,11 @@ int read_index_info(int nul_term_line, each_index_info_fn fn, void *cbdata)
 		unsigned long ul;
 		int stage;
 
+		if (!buf.len) {
+			ret = INDEX_INFO_EMPTY_LINE;
+			break;
+		}
+
 		/* This reads lines formatted in one of three formats:
 		 *
 		 * (1) mode         SP sha1          TAB path
