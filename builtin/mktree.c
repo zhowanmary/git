@@ -12,15 +12,39 @@
 #include "parse-options.h"
 #include "object-store-ll.h"
 
-static struct tree_entry {
+struct tree_entry {
 	unsigned mode;
 	struct object_id oid;
 	int len;
 	char name[FLEX_ARRAY];
-} **entries;
-static int alloc, used;
+};
 
-static void append_to_tree(unsigned mode, struct object_id *oid, char *path)
+struct tree_entry_array {
+	size_t nr, alloc;
+	struct tree_entry **entries;
+};
+
+static void tree_entry_array_push(struct tree_entry_array *arr, struct tree_entry *ent)
+{
+	ALLOC_GROW(arr->entries, arr->nr + 1, arr->alloc);
+	arr->entries[arr->nr++] = ent;
+}
+
+static void clear_tree_entry_array(struct tree_entry_array *arr)
+{
+	for (size_t i = 0; i < arr->nr; i++)
+		FREE_AND_NULL(arr->entries[i]);
+	arr->nr = 0;
+}
+
+static void release_tree_entry_array(struct tree_entry_array *arr)
+{
+	FREE_AND_NULL(arr->entries);
+	arr->nr = arr->alloc = 0;
+}
+
+static void append_to_tree(unsigned mode, struct object_id *oid, const char *path,
+			   struct tree_entry_array *arr)
 {
 	struct tree_entry *ent;
 	size_t len = strlen(path);
@@ -32,8 +56,8 @@ static void append_to_tree(unsigned mode, struct object_id *oid, char *path)
 	ent->len = len;
 	oidcpy(&ent->oid, oid);
 
-	ALLOC_GROW(entries, used + 1, alloc);
-	entries[used++] = ent;
+	/* Append the update */
+	tree_entry_array_push(arr, ent);
 }
 
 static int ent_compare(const void *a_, const void *b_)
@@ -44,19 +68,18 @@ static int ent_compare(const void *a_, const void *b_)
 				 b->name, b->len, b->mode);
 }
 
-static void write_tree(struct object_id *oid)
+static void write_tree(struct tree_entry_array *arr, struct object_id *oid)
 {
 	struct strbuf buf;
-	size_t size;
-	int i;
+	size_t size = 0;
 
-	QSORT(entries, used, ent_compare);
-	for (size = i = 0; i < used; i++)
-		size += 32 + entries[i]->len;
+	QSORT(arr->entries, arr->nr, ent_compare);
+	for (size_t i = 0; i < arr->nr; i++)
+		size += 32 + arr->entries[i]->len;
 
 	strbuf_init(&buf, size);
-	for (i = 0; i < used; i++) {
-		struct tree_entry *ent = entries[i];
+	for (size_t i = 0; i < arr->nr; i++) {
+		struct tree_entry *ent = arr->entries[i];
 		strbuf_addf(&buf, "%o %s%c", ent->mode, ent->name, '\0');
 		strbuf_add(&buf, ent->oid.hash, the_hash_algo->rawsz);
 	}
@@ -70,7 +93,8 @@ static const char *mktree_usage[] = {
 	NULL
 };
 
-static void mktree_line(char *buf, int nul_term_line, int allow_missing)
+static void mktree_line(char *buf, int nul_term_line, int allow_missing,
+			struct tree_entry_array *arr)
 {
 	char *ptr, *ntr;
 	const char *p;
@@ -146,7 +170,7 @@ static void mktree_line(char *buf, int nul_term_line, int allow_missing)
 		}
 	}
 
-	append_to_tree(mode, &oid, path);
+	append_to_tree(mode, &oid, path, arr);
 	free(to_free);
 }
 
@@ -158,6 +182,7 @@ int cmd_mktree(int ac, const char **av, const char *prefix)
 	int allow_missing = 0;
 	int is_batch_mode = 0;
 	int got_eof = 0;
+	struct tree_entry_array arr = { 0 };
 	strbuf_getline_fn getline_fn;
 
 	const struct option option[] = {
@@ -182,9 +207,9 @@ int cmd_mktree(int ac, const char **av, const char *prefix)
 					break;
 				die("input format error: (blank line only valid in batch mode)");
 			}
-			mktree_line(sb.buf, nul_term_line, allow_missing);
+			mktree_line(sb.buf, nul_term_line, allow_missing, &arr);
 		}
-		if (is_batch_mode && got_eof && used < 1) {
+		if (is_batch_mode && got_eof && arr.nr < 1) {
 			/*
 			 * Execution gets here if the last tree entry is terminated with a
 			 * new-line.  The final new-line has been made optional to be
@@ -192,12 +217,14 @@ int cmd_mktree(int ac, const char **av, const char *prefix)
 			 */
 			; /* skip creating an empty tree */
 		} else {
-			write_tree(&oid);
+			write_tree(&arr, &oid);
 			puts(oid_to_hex(&oid));
 			fflush(stdout);
 		}
-		used=0; /* reset tree entry buffer for re-use in batch mode */
+		clear_tree_entry_array(&arr); /* reset tree entry buffer for re-use in batch mode */
 	}
+
+	release_tree_entry_array(&arr);
 	strbuf_release(&sb);
 	return 0;
 }
