@@ -32,7 +32,7 @@ struct tree_entry {
 
 static inline size_t df_path_len(size_t pathlen, unsigned int mode)
 {
-	return S_ISDIR(mode) ? pathlen - 1 : pathlen;
+	return (S_ISDIR(mode) || !mode) ? pathlen - 1 : pathlen;
 }
 
 struct tree_entry_array {
@@ -106,7 +106,7 @@ static void append_to_tree(unsigned mode, struct object_id *oid, const char *pat
 		size_t len_to_copy = len;
 
 		/* Normalize and validate entry path */
-		if (S_ISDIR(mode)) {
+		if (S_ISDIR(mode) || !mode) {
 			while(len_to_copy > 0 && is_dir_sep(path[len_to_copy - 1]))
 				len_to_copy--;
 			len = len_to_copy + 1; /* add space for trailing slash */
@@ -122,7 +122,7 @@ static void append_to_tree(unsigned mode, struct object_id *oid, const char *pat
 			arr->has_nested_entries = 1;
 
 		/* Add trailing slash to dir */
-		if (S_ISDIR(mode))
+		if (S_ISDIR(mode) || !mode)
 			ent->name[len - 1] = '/';
 	}
 
@@ -208,7 +208,7 @@ static void sort_and_dedup_tree_entry_array(struct tree_entry_array *arr)
 
 			if (!skip_entry) {
 				arr->entries[arr->nr++] = curr;
-				if (S_ISDIR(curr->mode))
+				if (S_ISDIR(curr->mode) || !curr->mode)
 					tree_entry_array_push(&parent_dir_ents, curr);
 			} else {
 				FREE_AND_NULL(curr);
@@ -272,6 +272,9 @@ static int build_index_from_tree(const struct object_id *oid,
 static int add_tree_entry_to_index(struct build_index_data *data,
 				   struct tree_entry *ent)
 {
+	if (!ent->mode)
+		return 0;
+
 	if (ent->expand_dir) {
 		int ret = 0;
 		struct pathspec ps = { 0 };
@@ -445,36 +448,39 @@ static int mktree_line(unsigned int mode, struct object_id *oid,
 		       const char *path, void *cbdata)
 {
 	struct mktree_line_data *data = cbdata;
-	enum object_type mode_type = object_type(mode);
-	struct object_info oi = OBJECT_INFO_INIT;
-	enum object_type parsed_obj_type;
 
-	if (obj_type && mode_type != obj_type)
-		die("object type (%s) doesn't match mode type (%s)",
-		    type_name(obj_type), type_name(mode_type));
+	if (mode) {
+		struct object_info oi = OBJECT_INFO_INIT;
+		enum object_type parsed_obj_type;
+		enum object_type mode_type = object_type(mode);
 
-	oi.typep = &parsed_obj_type;
+		if (obj_type && mode_type != obj_type)
+			die("object type (%s) doesn't match mode type (%s)",
+			    type_name(obj_type), type_name(mode_type));
 
-	if (oid_object_info_extended(the_repository, oid, &oi,
-				     OBJECT_INFO_LOOKUP_REPLACE |
-				     OBJECT_INFO_QUICK |
-				     OBJECT_INFO_SKIP_FETCH_OBJECT) < 0)
-		parsed_obj_type = -1;
+		oi.typep = &parsed_obj_type;
 
-	if (parsed_obj_type < 0) {
-		if (data->allow_missing || S_ISGITLINK(mode)) {
-			; /* no problem - missing objects & submodules are presumed to be of the right type */
-		} else {
-			die("entry '%s' object %s is unavailable", path, oid_to_hex(oid));
+		if (oid_object_info_extended(the_repository, oid, &oi,
+					     OBJECT_INFO_LOOKUP_REPLACE |
+					     OBJECT_INFO_QUICK |
+					     OBJECT_INFO_SKIP_FETCH_OBJECT) < 0)
+			parsed_obj_type = -1;
+
+		if (parsed_obj_type < 0) {
+			if (data->allow_missing || S_ISGITLINK(mode)) {
+				; /* no problem - missing objects & submodules are presumed to be of the right type */
+			} else {
+				die("entry '%s' object %s is unavailable", path, oid_to_hex(oid));
+			}
+		} else if (parsed_obj_type != mode_type) {
+			/*
+			* The object exists but is of the wrong type.
+			* This is a problem regardless of allow_missing
+			* because the new tree entry will never be correct.
+			*/
+			die("entry '%s' object %s is a %s but specified type was (%s)",
+			path, oid_to_hex(oid), type_name(parsed_obj_type), type_name(mode_type));
 		}
-	} else if (parsed_obj_type != mode_type) {
-		/*
-		 * The object exists but is of the wrong type.
-		 * This is a problem regardless of allow_missing
-		 * because the new tree entry will never be correct.
-		 */
-		die("entry '%s' object %s is a %s but specified type was (%s)",
-		    path, oid_to_hex(oid), type_name(parsed_obj_type), type_name(mode_type));
 	}
 
 	append_to_tree(mode, oid, path, data->arr, data->literally);
