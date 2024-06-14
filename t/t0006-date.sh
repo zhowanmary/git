@@ -88,11 +88,12 @@ FUTURE="5758122296 -0400"
 check_show iso       "$FUTURE" "2152-06-19 18:24:56 -0400" HAVE_64BIT_TIME
 check_show iso-local "$FUTURE" "2152-06-19 22:24:56 +0000" HAVE_64BIT_TIME
 
-check_parse() {
+REQUIRE_64BIT_TIME=
+check_parse () {
 	echo "$1 -> $2" >expect
-	test_expect_${4:-success} "parse date ($1${3:+ TZ=$3})" "
-	TZ=${3:-$TZ} test-tool date parse '$1' >actual &&
-	test_cmp expect actual
+	test_expect_success $REQUIRE_64BIT_TIME "parse date ($1${3:+ TZ=$3}) -> $2" "
+		TZ=${3:-$TZ} test-tool date parse '$1' >actual &&
+		test_cmp expect actual
 	"
 }
 
@@ -138,6 +139,7 @@ check_parse '1969-12-31 23:59:59 Z' bad
 check_parse '1969-12-31 23:59:59 +11' bad
 check_parse '1969-12-31 23:59:59 -11' bad
 
+REQUIRE_64BIT_TIME=HAVE_64BIT_TIME
 check_parse '2099-12-31 23:59:59' '2099-12-31 23:59:59 +0000'
 check_parse '2099-12-31 23:59:59 +00' '2099-12-31 23:59:59 +0000'
 check_parse '2099-12-31 23:59:59 Z' '2099-12-31 23:59:59 +0000'
@@ -152,6 +154,7 @@ check_parse '2100-00-00 00:00:00 +00' bad
 check_parse '2100-00-00 00:00:00 Z' bad
 check_parse '2100-00-00 00:00:00 -11' bad
 check_parse '2100-00-00 00:00:00 +11' bad
+REQUIRE_64BIT_TIME=
 
 check_approxidate() {
 	echo "$1 -> $2 +0000" >expect
