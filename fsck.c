@@ -1200,6 +1200,20 @@ int fsck_buffer(const struct object_id *oid, enum object_type type,
 		      type);
 }
 
+int fsck_refs_error_function(struct fsck_refs_options *o UNUSED,
+			     const char *name,
+			     enum fsck_msg_type msg_type,
+			     enum fsck_msg_id msg_id UNUSED,
+			     const char *message)
+{
+	if (msg_type == FSCK_WARN) {
+		warning("%s: %s", name, message);
+		return 0;
+	}
+	error("%s: %s", name, message);
+	return 1;
+}
+
 int fsck_error_function(struct fsck_options *o,
 			const struct object_id *oid,
 			enum object_type object_type UNUSED,
@@ -1268,6 +1282,61 @@ int fsck_finish(struct fsck_options *options)
 			  options, ".gitattributes");
 
 	return ret;
+}
+
+int fsck_refs_report(struct fsck_refs_options *o,
+		     const char *name,
+		     enum fsck_msg_id msg_id,
+		     const char *fmt, ...)
+{
+	va_list ap;
+	struct strbuf sb = STRBUF_INIT;
+	enum fsck_msg_type msg_type =
+		fsck_msg_type(msg_id, (struct fsck_options*)o);
+	int ret = 0;
+
+	if (msg_type == FSCK_IGNORE)
+		return 0;
+
+	if (msg_type == FSCK_FATAL)
+		msg_type = FSCK_ERROR;
+	else if (msg_type == FSCK_INFO)
+		msg_type = FSCK_WARN;
+
+	prepare_msg_ids();
+	strbuf_addf(&sb, "%s: ", msg_id_info[msg_id].camelcased);
+
+	va_start(ap, fmt);
+	strbuf_vaddf(&sb, fmt, ap);
+	ret = o->error_func(o, name, msg_type, msg_id, sb.buf);
+	strbuf_release(&sb);
+	va_end(ap);
+
+	return ret;
+}
+
+int git_fsck_refs_config(const char *var, const char *value,
+			 const struct config_context *ctx, void *cb)
+{
+	struct fsck_refs_options *options = cb;
+	const char *msg_id;
+
+	/*
+	 * We don't check the value of fsck.skiplist here, because it
+	 * is specific to object database, not reference database.
+	 */
+	if (strcmp(var, "fsck.skiplist") == 0) {
+		return 0;
+	}
+
+	if (skip_prefix(var, "fsck.", &msg_id)) {
+		if (!value)
+			return config_error_nonbool(var);
+		fsck_set_msg_type((struct fsck_options*)options, msg_id, value);
+		return 0;
+	}
+
+	return git_default_config(var, value, ctx, cb);
 }
 
 int git_fsck_config(const char *var, const char *value,

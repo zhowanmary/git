@@ -31,6 +31,8 @@ enum fsck_msg_type {
 	FUNC(BAD_NAME, ERROR) \
 	FUNC(BAD_OBJECT_SHA1, ERROR) \
 	FUNC(BAD_PARENT_SHA1, ERROR) \
+	FUNC(BAD_REF_NAME, ERROR) \
+	FUNC(BAD_REF_SHA, ERROR) \
 	FUNC(BAD_TIMEZONE, ERROR) \
 	FUNC(BAD_TREE, ERROR) \
 	FUNC(BAD_TREE_SHA1, ERROR) \
@@ -66,11 +68,13 @@ enum fsck_msg_type {
 	FUNC(GITATTRIBUTES_BLOB, ERROR) \
 	/* warnings */ \
 	FUNC(EMPTY_NAME, WARN) \
+	FUNC(DANGLING_SYMREF, WARN) \
 	FUNC(FULL_PATHNAME, WARN) \
 	FUNC(HAS_DOT, WARN) \
 	FUNC(HAS_DOTDOT, WARN) \
 	FUNC(HAS_DOTGIT, WARN) \
 	FUNC(NULL_SHA1, WARN) \
+	FUNC(TRAILING_REF_CONTENT, WARN) \
 	FUNC(ZERO_PADDED_FILEMODE, WARN) \
 	FUNC(NUL_IN_COMMIT, WARN) \
 	FUNC(LARGE_PATHNAME, WARN) \
@@ -92,6 +96,7 @@ enum fsck_msg_id {
 };
 #undef MSG_ID
 
+struct fsck_refs_options;
 struct fsck_options;
 struct object;
 
@@ -102,6 +107,21 @@ void fsck_set_msg_type(struct fsck_options *options,
 		       const char *msg_id, const char *msg_type);
 void fsck_set_msg_types(struct fsck_options *options, const char *values);
 int is_valid_msg_type(const char *msg_id, const char *msg_type);
+
+/*
+ * callback function for fsck refs and reflogs.
+ */
+typedef int (*fsck_refs_error)(struct fsck_refs_options *o,
+			       const char *name,
+			       enum fsck_msg_type msg_type,
+			       enum fsck_msg_id msg_id,
+			       const char *message);
+
+int fsck_refs_error_function(struct fsck_refs_options *o,
+			     const char *name,
+			     enum fsck_msg_type msg_type,
+			     enum fsck_msg_id msg_id,
+			     const char *message);
 
 /*
  * callback function for fsck_walk
@@ -131,11 +151,22 @@ int fsck_error_cb_print_missing_gitmodules(struct fsck_options *o,
 					   enum fsck_msg_id msg_id,
 					   const char *message);
 
+struct fsck_refs_options {
+	enum fsck_msg_type *msg_type;
+	unsigned strict:1;
+	fsck_refs_error error_func;
+	unsigned verbose:1;
+};
+
+#define FSCK_REFS_OPTIONS_DEFAULT { \
+	.error_func = fsck_refs_error_function, \
+}
+
 struct fsck_options {
+	enum fsck_msg_type *msg_type;
+	unsigned strict:1;
 	fsck_walk_func walk;
 	fsck_error error_func;
-	unsigned strict:1;
-	enum fsck_msg_type *msg_type;
 	struct oidset skiplist;
 	struct oidset gitmodules_found;
 	struct oidset gitmodules_done;
@@ -209,6 +240,12 @@ int fsck_tag_standalone(const struct object_id *oid, const char *buffer,
  */
 int fsck_finish(struct fsck_options *options);
 
+__attribute__((format (printf, 4, 5)))
+int fsck_refs_report(struct fsck_refs_options *o,
+		     const char *name,
+		     enum fsck_msg_id msg_id,
+		     const char *fmt, ...);
+
 /*
  * Subsystem for storing human-readable names for each object.
  *
@@ -235,6 +272,8 @@ const char *fsck_describe_object(struct fsck_options *options,
 				 const struct object_id *oid);
 
 struct key_value_info;
+int git_fsck_refs_config(const char *var, const char *value,
+			 const struct config_context *ctx, void *cb);
 /*
  * git_config() callback for use by fsck-y tools that want to support
  * fsck.<msg> fsck.skipList etc.
