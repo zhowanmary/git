@@ -18,6 +18,8 @@
 
 /* The main repository */
 static struct repository the_repo;
+
+extern struct repository *the_repository;
 struct repository *the_repository = &the_repo;
 
 /*
