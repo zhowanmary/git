@@ -1,3 +1,5 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "cache-tree.h"
 #include "gettext.h"
@@ -77,7 +79,7 @@ static int update_refs(const struct reset_head_opts *opts,
 						 reflog_head);
 	}
 	if (!ret && run_hook)
-		run_hooks_l("post-checkout",
+		run_hooks_l(the_repository, "post-checkout",
 			    oid_to_hex(head ? head : null_oid()),
 			    oid_to_hex(oid), "1", NULL);
 	strbuf_release(&msg);

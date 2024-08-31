@@ -2,6 +2,8 @@
  * The Scalar command-line interface.
  */
 
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "abspath.h"
 #include "gettext.h"
@@ -70,6 +72,7 @@ static void setup_enlistment_directory(int argc, const char **argv,
 	strbuf_release(&path);
 }
 
+LAST_ARG_MUST_BE_NULL
 static int run_git(const char *arg, ...)
 {
 	struct child_process cmd = CHILD_PROCESS_INIT;
@@ -288,6 +291,7 @@ static int unregister_dir(void)
 }
 
 /* printf-style interface, expects `<key>=<value>` argument */
+__attribute__((format (printf, 1, 2)))
 static int set_config(const char *fmt, ...)
 {
 	struct strbuf buf = STRBUF_INIT;
@@ -396,7 +400,8 @@ static int delete_enlistment(struct strbuf *enlistment)
  * Dummy implementation; Using `get_version_info()` would cause a link error
  * without this.
  */
-void load_builtin_commands(const char *prefix, struct cmdnames *cmds)
+void load_builtin_commands(const char *prefix UNUSED,
+			   struct cmdnames *cmds UNUSED)
 {
 	die("not implemented");
 }

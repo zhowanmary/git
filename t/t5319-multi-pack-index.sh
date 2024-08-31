@@ -3,8 +3,11 @@
 test_description='multi-pack-indexes'
 . ./test-lib.sh
 . "$TEST_DIRECTORY"/lib-chunk.sh
+. "$TEST_DIRECTORY"/lib-midx.sh
 
 GIT_TEST_MULTI_PACK_INDEX=0
+GIT_TEST_MULTI_PACK_INDEX_WRITE_BITMAP=0
+GIT_TEST_MULTI_PACK_INDEX_WRITE_INCREMENTAL=0
 objdir=.git/objects
 
 HASH_LEN=$(test_oid rawsz)
@@ -106,30 +109,6 @@ test_expect_success 'write midx with one v1 pack' '
 	git multi-pack-index --object-dir=$objdir write &&
 	midx_read_expect 1 18 4 $objdir
 '
-
-midx_git_two_modes () {
-	git -c core.multiPackIndex=false $1 >expect &&
-	git -c core.multiPackIndex=true $1 >actual &&
-	if [ "$2" = "sorted" ]
-	then
-		sort <expect >expect.sorted &&
-		mv expect.sorted expect &&
-		sort <actual >actual.sorted &&
-		mv actual.sorted actual
-	fi &&
-	test_cmp expect actual
-}
-
-compare_results_with_midx () {
-	MSG=$1
-	test_expect_success "check normal git operations: $MSG" '
-		midx_git_two_modes "rev-list --objects --all" &&
-		midx_git_two_modes "log --raw" &&
-		midx_git_two_modes "count-objects --verbose" &&
-		midx_git_two_modes "cat-file --batch-all-objects --batch-check" &&
-		midx_git_two_modes "cat-file --batch-all-objects --batch-check --unordered" sorted
-	'
-}
 
 test_expect_success 'write midx with one v2 pack' '
 	git pack-objects --index-version=2,0x40 $objdir/pack/test <obj-list &&
@@ -600,8 +579,7 @@ test_expect_success 'repack preserves multi-pack-index when creating packs' '
 compare_results_with_midx "after repack"
 
 test_expect_success 'multi-pack-index and pack-bitmap' '
-	GIT_TEST_MULTI_PACK_INDEX_WRITE_BITMAP=0 \
-		git -c repack.writeBitmaps=true repack -ad &&
+	git -c repack.writeBitmaps=true repack -ad &&
 	git multi-pack-index write &&
 	git rev-list --test-bitmap HEAD
 '
@@ -1024,6 +1002,61 @@ test_expect_success 'repack --batch-size=<large> repacks everything' '
 		git multi-pack-index expire &&
 		ls -al .git/objects/pack/*idx >idx-list &&
 		test_line_count = 1 idx-list
+	)
+'
+
+test_expect_success 'repack/expire loop' '
+	git init repack-expire &&
+	test_when_finished "rm -fr repack-expire" &&
+	(
+		cd repack-expire &&
+
+		test_commit_bulk 5 &&
+
+		# Create three overlapping pack-files
+		git rev-list --objects HEAD~3 >in-1 &&
+		git rev-list --objects HEAD~4..HEAD~2 >in-2 &&
+		git rev-list --objects HEAD~3..HEAD >in-3 &&
+
+		# Create disconnected blobs
+		obj1=$(git hash-object -w in-1) &&
+		obj2=$(git hash-object -w in-2) &&
+		obj3=$(git hash-object -w in-3) &&
+
+		echo $obj2 >>in-2 &&
+		echo $obj3 >>in-3 &&
+
+		for i in $(test_seq 3)
+		do
+			git pack-objects .git/objects/pack/test-$i <in-$i \
+				|| return 1
+		done &&
+
+		rm -fr .git/objects/pack/pack-* &&
+		git multi-pack-index write &&
+
+		for i in $(test_seq 3)
+		do
+			for file in $(ls .git/objects/pack/test-$i*)
+			do
+				test-tool chmtime =+$((3600*$i-25000)) $file || return 1
+			done || return 1
+		done &&
+
+		pack1=$(ls .git/objects/pack/test-1-*.pack) &&
+		pack2=$(ls .git/objects/pack/test-2-*.pack) &&
+		pack3=$(ls .git/objects/pack/test-3-*.pack) &&
+
+		# Prevent test-1 from being rewritten.
+		touch "${pack1%.pack}.keep" &&
+
+		# This repack-expire loop should repack all non-kept packs
+		# into a new pack and then delete the old packs.
+		git multi-pack-index repack &&
+		git multi-pack-index expire &&
+
+		test_path_is_missing $pack3 &&
+		test_path_is_missing $pack2
 	)
 '
 

@@ -16,6 +16,14 @@
 #include "promisor-remote.h"
 #include "refs.h"
 
+/*
+ * We do not define `USE_THE_REPOSITORY_VARIABLE` in this file because we do
+ * not want to rely on functions that implicitly use `the_repository`. This
+ * means that the `extern` declaration of `the_repository` isn't visible here,
+ * which makes sparse unhappy. We thus declare it here.
+ */
+extern struct repository *the_repository;
+
 /* The main repository */
 static struct repository the_repo;
 struct repository *the_repository = &the_repo;
@@ -148,7 +156,8 @@ void repo_set_compat_hash_algo(struct repository *repo, int algo)
 		repo_read_loose_object_map(repo);
 }
 
-void repo_set_ref_storage_format(struct repository *repo, unsigned int format)
+void repo_set_ref_storage_format(struct repository *repo,
+				 enum ref_storage_format format)
 {
 	repo->ref_storage_format = format;
 }

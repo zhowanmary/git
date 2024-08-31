@@ -41,7 +41,7 @@
 
 static const char * const builtin_commit_usage[] = {
 	N_("git commit [-a | --interactive | --patch] [-s] [-v] [-u<mode>] [--amend]\n"
-	   "           [--dry-run] [(-c | -C | --squash) <commit> | --fixup [(amend|reword):]<commit>)]\n"
+	   "           [--dry-run] [(-c | -C | --squash) <commit> | --fixup [(amend|reword):]<commit>]\n"
 	   "           [-F <file> | -m <msg>] [--reset-author] [--allow-empty]\n"
 	   "           [--allow-empty-message] [--no-verify] [-e] [--author=<author>]\n"
 	   "           [--date=<date>] [--cleanup=<mode>] [--[no-]status]\n"
@@ -106,14 +106,15 @@ static enum {
 	COMMIT_PARTIAL
 } commit_style;
 
-static const char *logfile, *force_author;
+static const char *force_author;
+static char *logfile;
 static char *template_file;
 /*
  * The _message variables are commit names from which to take
  * the commit message and/or authorship.
  */
 static const char *author_message, *author_message_buffer;
-static char *edit_message, *use_message;
+static const char *edit_message, *use_message;
 static char *fixup_message, *fixup_commit, *squash_message;
 static const char *fixup_prefix;
 static int all, also, interactive, patch_interactive, only, amend, signoff;
@@ -121,8 +122,8 @@ static int edit_flag = -1; /* unspecified */
 static int quiet, verbose, no_verify, allow_empty, dry_run, renew_authorship;
 static int config_commit_verbose = -1; /* unspecified */
 static int no_post_rewrite, allow_empty_message, pathspec_file_nul;
-static char *untracked_files_arg, *force_date, *ignore_submodule_arg, *ignored_arg;
-static char *sign_commit, *pathspec_from_file;
+static const char *untracked_files_arg, *force_date, *ignore_submodule_arg, *ignored_arg;
+static const char *sign_commit, *pathspec_from_file;
 static struct strvec trailer_args = STRVEC_INIT;
 
 /*
@@ -683,7 +684,9 @@ static void adjust_comment_line_char(const struct strbuf *sb)
 	const char *p;
 
 	if (!memchr(sb->buf, candidates[0], sb->len)) {
-		comment_line_str = xstrfmt("%c", candidates[0]);
+		free(comment_line_str_to_free);
+		comment_line_str = comment_line_str_to_free =
+			xstrfmt("%c", candidates[0]);
 		return;
 	}
 
@@ -704,7 +707,8 @@ static void adjust_comment_line_char(const struct strbuf *sb)
 	if (!*p)
 		die(_("unable to select a comment character that is not used\n"
 		      "in the current commit message"));
-	comment_line_str = xstrfmt("%c", *p);
+	free(comment_line_str_to_free);
+	comment_line_str = comment_line_str_to_free = xstrfmt("%c", *p);
 }
 
 static void prepare_amend_commit(struct commit *commit, struct strbuf *sb,
@@ -1309,7 +1313,7 @@ static int parse_and_validate_options(int argc, const char *argv[],
 				  !!use_message, "-C",
 				  !!logfile, "-F");
 	if (use_message || edit_message || logfile ||fixup_message || have_option_m)
-		template_file = NULL;
+		FREE_AND_NULL(template_file);
 	if (edit_message)
 		use_message = edit_message;
 	if (amend && !use_message && !fixup_message)
@@ -1847,7 +1851,6 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 		rollback_index_files();
 		die(_("failed to write commit object"));
 	}
-	free_commit_extra_headers(extra);
 
 	if (update_head_with_reflog(current_head, &oid, reflog_msg, &sb,
 				    &err)) {
@@ -1889,8 +1892,12 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 	apply_autostash_ref(the_repository, "MERGE_AUTOSTASH");
 
 cleanup:
+	free_commit_extra_headers(extra);
+	free_commit_list(parents);
 	strbuf_release(&author_ident);
 	strbuf_release(&err);
 	strbuf_release(&sb);
+	free(logfile);
+	free(template_file);
 	return ret;
 }

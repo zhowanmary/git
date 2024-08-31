@@ -1,7 +1,7 @@
 #ifndef DIR_H
 #define DIR_H
 
-#include "hash-ll.h"
+#include "hash.h"
 #include "hashmap.h"
 #include "pathspec.h"
 #include "statinfo.h"
@@ -541,9 +541,9 @@ int remove_dir_recursively(struct strbuf *path, int flag);
  */
 int remove_path(const char *path);
 
-int fspathcmp(const char *a, const char *b);
+int git_fspathcmp(const char *a, const char *b);
 int fspatheq(const char *a, const char *b);
-int fspathncmp(const char *a, const char *b, size_t count);
+int git_fspathncmp(const char *a, const char *b, size_t count);
 unsigned int fspathhash(const char *str);
 
 /*

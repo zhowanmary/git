@@ -185,8 +185,8 @@ For shell scripts specifically (not exhaustive):
 
  - Even though "local" is not part of POSIX, we make heavy use of it
    in our test suite.  We do not use it in scripted Porcelains, and
-   hopefully nobody starts using "local" before they are reimplemented
-   in C ;-)
+   hopefully nobody starts using "local" before all shells that matter
+   support it (notably, ksh from AT&T Research does not support it yet).
 
  - Some versions of shell do not understand "export variable=value",
    so we write "variable=value" and then "export variable" on two
@@ -204,6 +204,33 @@ For shell scripts specifically (not exhaustive):
 	local variable="$value"
 	local variable="$(command args)"
 
+ - The common construct
+
+	VAR=VAL command args
+
+   to temporarily set and export environment variable VAR only while
+   "command args" is running is handy, but this triggers an
+   unspecified behaviour according to POSIX when used for a command
+   that is not an external command (like shell functions).  Indeed,
+   dash 0.5.10.2-6 on Ubuntu 20.04, /bin/sh on FreeBSD 13, and AT&T
+   ksh all make a temporary assignment without exporting the variable,
+   in such a case.  As it does not work portably across shells, do not
+   use this syntax for shell functions.  A common workaround is to do
+   an explicit export in a subshell, like so:
+
+	(incorrect)
+	VAR=VAL func args
+
+	(correct)
+	(
+		VAR=VAL &&
+		export VAR &&
+		func args
+	)
+
+   but be careful that the effect "func" makes to the variables in the
+   current shell will be lost across the subshell boundary.
+
  - Use octal escape sequences (e.g. "\302\242"), not hexadecimal (e.g.
    "\xc2\xa2") in printf format strings, since hexadecimal escape
    sequences are not portable.
@@ -213,6 +240,16 @@ For C programs:
 
  - We use tabs to indent, and interpret tabs as taking up to
    8 spaces.
+
+ - Nested C preprocessor directives are indented after the hash by one
+   space per nesting level.
+
+	#if FOO
+	# include <foo.h>
+	# if BAR
+	#  include <bar.h>
+	# endif
+	#endif
 
  - We try to keep to at most 80 characters per line.
 
@@ -234,7 +271,7 @@ For C programs:
    . since around 2007 with 2b6854c863a, we have been using
      initializer elements which are not computable at load time. E.g.:
 
-	const char *args[] = {"constant", variable, NULL};
+	const char *args[] = { "constant", variable, NULL };
 
    . since early 2012 with e1327023ea, we have been using an enum
      definition whose last element is followed by a comma.  This, like
@@ -266,7 +303,9 @@ For C programs:
      v12.01, 2022-03-28).
 
  - Variables have to be declared at the beginning of the block, before
-   the first statement (i.e. -Wdeclaration-after-statement).
+   the first statement (i.e. -Wdeclaration-after-statement).  It is
+   encouraged to have a blank line between the end of the declarations
+   and the first statement in the block.
 
  - NULL pointers shall be written as NULL, not as 0.
 
@@ -285,6 +324,13 @@ For C programs:
 
         while( condition )
 		func (bar+1);
+
+ - A binary operator (other than ",") and ternary conditional "?:"
+   have a space on each side of the operator to separate it from its
+   operands.  E.g. "A + 1", not "A+1".
+
+ - A unary operator (other than "." and "->") have no space between it
+   and its operand.  E.g. "(char *)ptr", not "(char *) ptr".
 
  - Do not explicitly compare an integral value with constant 0 or '\0',
    or a pointer value with constant NULL.  For instance, to validate that
@@ -530,6 +576,42 @@ For C programs:
    run `GIT_DEBUGGER="<debugger> <debugger-args>" ./bin-wrappers/git foo` to
    use your own debugger and arguments. Example: `GIT_DEBUGGER="ddd --gdb"
    ./bin-wrappers/git log` (See `wrap-for-bin.sh`.)
+
+ - The primary data structure that a subsystem 'S' deals with is called
+   `struct S`. Functions that operate on `struct S` are named
+   `S_<verb>()` and should generally receive a pointer to `struct S` as
+   first parameter. E.g.
+
+	struct strbuf;
+
+	void strbuf_add(struct strbuf *buf, ...);
+
+	void strbuf_reset(struct strbuf *buf);
+
+    is preferred over:
+
+	struct strbuf;
+
+	void add_string(struct strbuf *buf, ...);
+
+	void reset_strbuf(struct strbuf *buf);
+
+ - There are several common idiomatic names for functions performing
+   specific tasks on a structure `S`:
+
+    - `S_init()` initializes a structure without allocating the
+      structure itself.
+
+    - `S_release()` releases a structure's contents without freeing the
+      structure.
+
+    - `S_clear()` is equivalent to `S_release()` followed by `S_init()`
+      such that the structure is directly usable after clearing it. When
+      `S_clear()` is provided, `S_init()` shall not allocate resources
+      that need to be released again.
+
+    - `S_free()` releases a structure's contents and frees the
+      structure.
 
 For Perl programs:
 

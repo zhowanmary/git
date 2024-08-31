@@ -1,3 +1,5 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "object-store-ll.h"
 #include "dir.h"
@@ -167,6 +169,11 @@ static int remove_available_paths(struct string_list_item *item, void *cb_data)
 	return !available;
 }
 
+static int string_is_not_null(struct string_list_item *item, void *data UNUSED)
+{
+	return !!item->string;
+}
+
 int finish_delayed_checkout(struct checkout *state, int show_progress)
 {
 	int errs = 0;
@@ -184,12 +191,12 @@ int finish_delayed_checkout(struct checkout *state, int show_progress)
 		progress = start_delayed_progress(_("Filtering content"), dco->paths.nr);
 	while (dco->filters.nr > 0) {
 		for_each_string_list_item(filter, &dco->filters) {
-			struct string_list available_paths = STRING_LIST_INIT_NODUP;
+			struct string_list available_paths = STRING_LIST_INIT_DUP;
 
 			if (!async_query_available_blobs(filter->string, &available_paths)) {
 				/* Filter reported an error */
 				errs = 1;
-				filter->string = "";
+				filter->string = NULL;
 				continue;
 			}
 			if (available_paths.nr <= 0) {
@@ -199,7 +206,7 @@ int finish_delayed_checkout(struct checkout *state, int show_progress)
 				 * filter from the list (see
 				 * "string_list_remove_empty_items" call below).
 				 */
-				filter->string = "";
+				filter->string = NULL;
 				continue;
 			}
 
@@ -225,7 +232,7 @@ int finish_delayed_checkout(struct checkout *state, int show_progress)
 					 * Do not ask the filter for available blobs,
 					 * again, as the filter is likely buggy.
 					 */
-					filter->string = "";
+					filter->string = NULL;
 					continue;
 				}
 				ce = index_file_exists(state->istate, path->string,
@@ -238,8 +245,11 @@ int finish_delayed_checkout(struct checkout *state, int show_progress)
 				} else
 					errs = 1;
 			}
+
+			string_list_clear(&available_paths, 0);
 		}
-		string_list_remove_empty_items(&dco->filters, 0);
+
+		filter_string_list(&dco->filters, 0, string_is_not_null, NULL);
 	}
 	stop_progress(&progress);
 	string_list_clear(&dco->filters, 0);

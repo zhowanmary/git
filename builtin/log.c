@@ -4,7 +4,7 @@
  * (C) Copyright 2006 Linus Torvalds
  *		 2006 Junio Hamano
  */
-#include "git-compat-util.h"
+#include "builtin.h"
 #include "abspath.h"
 #include "config.h"
 #include "environment.h"
@@ -682,7 +682,7 @@ static void show_tagger(const char *buf, struct rev_info *rev)
 static int show_blob_object(const struct object_id *oid, struct rev_info *rev, const char *obj_name)
 {
 	struct object_id oidc;
-	struct object_context obj_context;
+	struct object_context obj_context = {0};
 	char *buf;
 	unsigned long size;
 
@@ -698,7 +698,7 @@ static int show_blob_object(const struct object_id *oid, struct rev_info *rev, c
 	if (!obj_context.path ||
 	    !textconv_object(the_repository, obj_context.path,
 			     obj_context.mode, &oidc, 1, &buf, &size)) {
-		free(obj_context.path);
+		object_context_release(&obj_context);
 		return stream_blob_to_fd(1, oid, NULL, 0);
 	}
 
@@ -706,7 +706,8 @@ static int show_blob_object(const struct object_id *oid, struct rev_info *rev, c
 		die(_("git show %s: bad file"), obj_name);
 
 	write_or_die(1, buf, size);
-	free(obj_context.path);
+	object_context_release(&obj_context);
+	free(buf);
 	return 0;
 }
 
@@ -1283,7 +1284,7 @@ static void get_patch_ids(struct rev_info *rev, struct patch_ids *ids)
 	o2->flags = flags2;
 }
 
-static void gen_message_id(struct rev_info *info, char *base)
+static void gen_message_id(struct rev_info *info, const char *base)
 {
 	struct strbuf buf = STRBUF_INIT;
 	strbuf_addf(&buf, "%s.%"PRItime".git.%s", base,
@@ -1434,6 +1435,7 @@ static void make_cover_letter(struct rev_info *rev, int use_separate_file,
 	int need_8bit_cte = 0;
 	struct pretty_print_context pp = {0};
 	struct commit *head = list[0];
+	char *to_free = NULL;
 
 	if (!cmit_fmt_is_mail(rev->commit_format))
 		die(_("cover letter needs email format"));
@@ -1455,7 +1457,7 @@ static void make_cover_letter(struct rev_info *rev, int use_separate_file,
 	}
 
 	if (!branch_name)
-		branch_name = find_branch_name(rev);
+		branch_name = to_free = find_branch_name(rev);
 
 	pp.fmt = CMIT_FMT_EMAIL;
 	pp.date_mode.type = DATE_RFC2822;
@@ -1466,6 +1468,7 @@ static void make_cover_letter(struct rev_info *rev, int use_separate_file,
 			   encoding, need_8bit_cte, cfg);
 	fprintf(rev->diffopt.file, "%s\n", sb.buf);
 
+	free(to_free);
 	free(pp.after_subject);
 	strbuf_release(&sb);
 
@@ -1825,12 +1828,14 @@ static struct commit *get_base_commit(const struct format_config *cfg,
 				if (die_on_failure) {
 					die(_("failed to find exact merge base"));
 				} else {
+					free_commit_list(merge_base);
 					free(rev);
 					return NULL;
 				}
 			}
 
 			rev[i] = merge_base->item;
+			free_commit_list(merge_base);
 		}
 
 		if (rev_nr % 2)
@@ -1938,7 +1943,7 @@ static void print_bases(struct base_tree_info *bases, FILE *file)
 	free(bases->patch_id);
 	bases->nr_patch_id = 0;
 	bases->alloc_patch_id = 0;
-	oidclr(&bases->base_commit);
+	oidclr(&bases->base_commit, the_repository->hash_algo);
 }
 
 static const char *diff_title(struct strbuf *sb,
@@ -2021,7 +2026,8 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 	const char *rfc = NULL;
 	int creation_factor = -1;
 	const char *signature = git_version_string;
-	const char *signature_file_arg = NULL;
+	char *signature_to_free = NULL;
+	char *signature_file_arg = NULL;
 	struct keep_callback_data keep_callback_data = {
 		.cfg = &cfg,
 		.revs = &rev,
@@ -2382,6 +2388,8 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 	if (cover_letter == -1) {
 		if (cfg.config_cover_letter == COVER_AUTO)
 			cover_letter = (total > 1);
+		else if ((idiff_prev.nr || rdiff_prev) && (total > 1))
+			cover_letter = (cfg.config_cover_letter != COVER_OFF);
 		else
 			cover_letter = (cfg.config_cover_letter == COVER_ON);
 	}
@@ -2439,7 +2447,7 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 
 		if (strbuf_read_file(&buf, signature_file, 128) < 0)
 			die_errno(_("unable to read signature file '%s'"), signature_file);
-		signature = strbuf_detach(&buf, NULL);
+		signature = signature_to_free = strbuf_detach(&buf, NULL);
 	} else if (cfg.signature) {
 		signature = cfg.signature;
 	}
@@ -2544,12 +2552,13 @@ int cmd_format_patch(int argc, const char **argv, const char *prefix)
 			else
 				print_signature(signature, rev.diffopt.file);
 		}
-		if (output_directory)
+		if (output_directory) {
 			fclose(rev.diffopt.file);
+			rev.diffopt.file = NULL;
+		}
 	}
 	stop_progress(&progress);
 	free(list);
-	free(branch_name);
 	if (ignore_if_in_upstream)
 		free_patch_ids(&ids);
 
@@ -2559,11 +2568,16 @@ done:
 	strbuf_release(&rdiff1);
 	strbuf_release(&rdiff2);
 	strbuf_release(&rdiff_title);
+	free(description_file);
+	free(signature_file_arg);
+	free(signature_to_free);
+	free(branch_name);
 	free(to_free);
 	free(rev.message_id);
 	if (rev.ref_message_ids)
 		string_list_clear(rev.ref_message_ids, 0);
 	free(rev.ref_message_ids);
+	rev.diffopt.no_free = 0;
 	release_revisions(&rev);
 	format_config_release(&cfg);
 	return 0;
@@ -2673,16 +2687,16 @@ int cmd_cherry(int argc, const char **argv, const char *prefix)
 		commit_list_insert(commit, &list);
 	}
 
-	while (list) {
+	for (struct commit_list *l = list; l; l = l->next) {
 		char sign = '+';
 
-		commit = list->item;
+		commit = l->item;
 		if (has_commit_patch_id(commit, &ids))
 			sign = '-';
 		print_commit(sign, commit, verbose, abbrev, revs.diffopt.file);
-		list = list->next;
 	}
 
+	free_commit_list(list);
 	free_patch_ids(&ids);
 	return 0;
 }

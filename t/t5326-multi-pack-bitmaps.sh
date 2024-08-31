@@ -4,10 +4,10 @@ test_description='exercise basic multi-pack bitmap functionality'
 . ./test-lib.sh
 . "${TEST_DIRECTORY}/lib-bitmap.sh"
 
-# We'll be writing our own midx and bitmaps, so avoid getting confused by the
+# We'll be writing our own MIDX, so avoid getting confused by the
 # automatic ones.
 GIT_TEST_MULTI_PACK_INDEX=0
-GIT_TEST_MULTI_PACK_INDEX_WRITE_BITMAP=0
+GIT_TEST_MULTI_PACK_INDEX_WRITE_INCREMENTAL=0
 
 # This test exercise multi-pack bitmap functionality where the object order is
 # stored and read from a special chunk within the MIDX, so use the default
@@ -550,5 +550,35 @@ do
 		)
 	'
 done
+
+test_expect_success 'remove one packfile between MIDX bitmap writes' '
+	git init remove-pack-between-writes &&
+	(
+		cd remove-pack-between-writes &&
+
+		test_commit A &&
+		test_commit B &&
+		test_commit C &&
+
+		# Create packs with the prefix "pack-A", "pack-B",
+		# "pack-C" to impose a lexicographic order on these
+		# packs so the pack being removed is always from the
+		# middle.
+		packdir=.git/objects/pack &&
+		A="$(echo A | git pack-objects $packdir/pack-A --revs)" &&
+		B="$(echo B | git pack-objects $packdir/pack-B --revs)" &&
+		C="$(echo C | git pack-objects $packdir/pack-C --revs)" &&
+
+		git multi-pack-index write --bitmap &&
+
+		cat >in <<-EOF &&
+		pack-A-$A.idx
+		pack-C-$C.idx
+		EOF
+		git multi-pack-index write --bitmap --stdin-packs <in &&
+
+		git rev-list --test-bitmap HEAD
+	)
+'
 
 test_done

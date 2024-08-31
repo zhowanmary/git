@@ -460,11 +460,8 @@ parse_done:
 	else
 		get_from_rev(&rev, &log);
 
-	release_revisions(&rev);
-
 	shortlog_output(&log);
-	if (log.file != stdout)
-		fclose(log.file);
+	release_revisions(&rev);
 	return 0;
 }
 
@@ -517,4 +514,5 @@ void shortlog_output(struct shortlog *log)
 	string_list_clear(&log->list, 1);
 	clear_mailmap(&log->mailmap);
 	string_list_clear(&log->format, 0);
+	string_list_clear(&log->trailers, 0);
 }

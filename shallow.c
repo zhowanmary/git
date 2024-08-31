@@ -1,3 +1,5 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "hex.h"
 #include "repository.h"
@@ -610,6 +612,7 @@ static void paint_down(struct paint_info *info, const struct object_id *oid,
 }
 
 static int mark_uninteresting(const char *refname UNUSED,
+			      const char *referent UNUSED,
 			      const struct object_id *oid,
 			      int flags UNUSED,
 			      void *cb_data UNUSED)
@@ -725,6 +728,7 @@ struct commit_array {
 };
 
 static int add_ref(const char *refname UNUSED,
+		  const char *referent UNUSED,
 		   const struct object_id *oid,
 		   int flags UNUSED,
 		   void *cb_data)

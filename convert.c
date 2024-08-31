@@ -1,3 +1,5 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "advice.h"
 #include "config.h"
@@ -321,6 +323,9 @@ static void trace_encoding(const char *context, const char *path,
 	static struct trace_key coe = TRACE_KEY_INIT(WORKING_TREE_ENCODING);
 	struct strbuf trace = STRBUF_INIT;
 	int i;
+
+	if (!trace_want(&coe))
+		return;
 
 	strbuf_addf(&trace, "%s (%s, considered %s):\n", context, path, encoding);
 	for (i = 0; i < len && buf; ++i) {
@@ -958,7 +963,7 @@ int async_query_available_blobs(const char *cmd, struct string_list *available_p
 	while ((line = packet_read_line(process->out, NULL))) {
 		const char *path;
 		if (skip_prefix(line, "pathname=", &path))
-			string_list_insert(available_paths, xstrdup(path));
+			string_list_insert(available_paths, path);
 		else
 			; /* ignore unknown keys */
 	}
@@ -1048,14 +1053,20 @@ static int read_convert_config(const char *var, const char *value,
 	 * The command-line will not be interpolated in any way.
 	 */
 
-	if (!strcmp("smudge", key))
+	if (!strcmp("smudge", key)) {
+		FREE_AND_NULL(drv->smudge);
 		return git_config_string(&drv->smudge, var, value);
+	}
 
-	if (!strcmp("clean", key))
+	if (!strcmp("clean", key)) {
+		FREE_AND_NULL(drv->clean);
 		return git_config_string(&drv->clean, var, value);
+	}
 
-	if (!strcmp("process", key))
+	if (!strcmp("process", key)) {
+		FREE_AND_NULL(drv->process);
 		return git_config_string(&drv->process, var, value);
+	}
 
 	if (!strcmp("required", key)) {
 		drv->required = git_config_bool(var, value);

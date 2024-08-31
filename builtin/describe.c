@@ -53,6 +53,10 @@ static const char *diff_index_args[] = {
 	"diff-index", "--quiet", "HEAD", "--", NULL
 };
 
+static const char *update_index_args[] = {
+	"update-index", "--unmerged", "-q", "--refresh", NULL
+};
+
 struct commit_name {
 	struct hashmap_entry entry;
 	struct object_id peeled;
@@ -145,7 +149,7 @@ static void add_to_known_names(const char *path,
 	}
 }
 
-static int get_name(const char *path, const struct object_id *oid,
+static int get_name(const char *path, const char *referent UNUSED, const struct object_id *oid,
 		    int flag UNUSED, void *cb_data UNUSED)
 {
 	int is_tag = 0;
@@ -525,6 +529,7 @@ static void describe_blob(struct object_id oid, struct strbuf *dst)
 	traverse_commit_list(&revs, process_commit, process_object, &pcd);
 	reset_revision_walk();
 	release_revisions(&revs);
+	strvec_clear(&args);
 }
 
 static void describe(const char *arg, int last_one)
@@ -615,6 +620,8 @@ int cmd_describe(int argc, const char **argv, const char *prefix)
 	if (contains) {
 		struct string_list_item *item;
 		struct strvec args;
+		const char **argv_copy;
+		int ret;
 
 		strvec_init(&args);
 		strvec_pushl(&args, "name-rev",
@@ -633,7 +640,21 @@ int cmd_describe(int argc, const char **argv, const char *prefix)
 			strvec_pushv(&args, argv);
 		else
 			strvec_push(&args, "HEAD");
-		return cmd_name_rev(args.nr, args.v, prefix);
+
+		/*
+		 * `cmd_name_rev()` modifies the array, so we'd leak its
+		 * contained strings if we didn't do a copy here.
+		 */
+		ALLOC_ARRAY(argv_copy, args.nr + 1);
+		for (size_t i = 0; i < args.nr; i++)
+			argv_copy[i] = args.v[i];
+		argv_copy[args.nr] = NULL;
+
+		ret = cmd_name_rev(args.nr, argv_copy, prefix);
+
+		strvec_clear(&args);
+		free(argv_copy);
+		return ret;
 	}
 
 	hashmap_init(&names, commit_name_neq, NULL, 0);
@@ -645,6 +666,14 @@ int cmd_describe(int argc, const char **argv, const char *prefix)
 	if (argc == 0) {
 		if (broken) {
 			struct child_process cp = CHILD_PROCESS_INIT;
+
+			strvec_pushv(&cp.args, update_index_args);
+			cp.git_cmd = 1;
+			cp.no_stdin = 1;
+			cp.no_stdout = 1;
+			run_command(&cp);
+
+			child_process_init(&cp);
 			strvec_pushv(&cp.args, diff_index_args);
 			cp.git_cmd = 1;
 			cp.no_stdin = 1;
@@ -667,7 +696,6 @@ int cmd_describe(int argc, const char **argv, const char *prefix)
 		} else if (dirty) {
 			struct lock_file index_lock = LOCK_INIT;
 			struct rev_info revs;
-			struct strvec args = STRVEC_INIT;
 			int fd;
 
 			setup_work_tree();
@@ -682,8 +710,9 @@ int cmd_describe(int argc, const char **argv, const char *prefix)
 				repo_update_index_if_able(the_repository, &index_lock);
 
 			repo_init_revisions(the_repository, &revs, prefix);
-			strvec_pushv(&args, diff_index_args);
-			if (setup_revisions(args.nr, args.v, &revs, NULL) != 1)
+
+			if (setup_revisions(ARRAY_SIZE(diff_index_args) - 1,
+					    diff_index_args, &revs, NULL) != 1)
 				BUG("malformed internal diff-index command line");
 			run_diff_index(&revs, 0);
 

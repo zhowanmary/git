@@ -3,6 +3,9 @@
  * Fredrik Kuivinen.
  * The thieves were Alex Riesen and Johannes Schindelin, in June/July 2006
  */
+
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "merge-recursive.h"
 
@@ -239,7 +242,8 @@ enum rename_type {
 struct stage_data {
 	struct diff_filespec stages[4]; /* mostly for oid & mode; maybe path */
 	struct rename_conflict_info *rename_conflict_info;
-	unsigned processed:1;
+	unsigned processed:1,
+		 rename_conflict_info_owned:1;
 };
 
 struct rename {
@@ -308,6 +312,7 @@ static inline void setup_rename_conflict_info(enum rename_type rename_type,
 
 	ci->ren1->dst_entry->processed = 0;
 	ci->ren1->dst_entry->rename_conflict_info = ci;
+	ci->ren1->dst_entry->rename_conflict_info_owned = 1;
 	if (ren2) {
 		ci->ren2->dst_entry->rename_conflict_info = ci;
 	}
@@ -3055,6 +3060,10 @@ static void final_cleanup_rename(struct string_list *rename)
 	for (i = 0; i < rename->nr; i++) {
 		re = rename->items[i].util;
 		diff_free_filepair(re->pair);
+		if (re->src_entry->rename_conflict_info_owned)
+			FREE_AND_NULL(re->src_entry->rename_conflict_info);
+		if (re->dst_entry->rename_conflict_info_owned)
+			FREE_AND_NULL(re->dst_entry->rename_conflict_info);
 	}
 	string_list_clear(rename, 1);
 	free(rename);
@@ -3627,15 +3636,16 @@ static int merge_trees_internal(struct merge_options *opt,
 static int merge_recursive_internal(struct merge_options *opt,
 				    struct commit *h1,
 				    struct commit *h2,
-				    struct commit_list *merge_bases,
+				    const struct commit_list *_merge_bases,
 				    struct commit **result)
 {
+	struct commit_list *merge_bases = copy_commit_list(_merge_bases);
 	struct commit_list *iter;
 	struct commit *merged_merge_bases;
 	struct tree *result_tree;
-	int clean;
 	const char *ancestor_name;
 	struct strbuf merge_base_abbrev = STRBUF_INIT;
+	int ret;
 
 	if (show(opt, 4)) {
 		output(opt, 4, _("Merging:"));
@@ -3645,8 +3655,10 @@ static int merge_recursive_internal(struct merge_options *opt,
 
 	if (!merge_bases) {
 		if (repo_get_merge_bases(the_repository, h1, h2,
-					 &merge_bases) < 0)
-			return -1;
+					 &merge_bases) < 0) {
+			ret = -1;
+			goto out;
+		}
 		merge_bases = reverse_commit_list(merge_bases);
 	}
 
@@ -3696,14 +3708,18 @@ static int merge_recursive_internal(struct merge_options *opt,
 		opt->branch1 = "Temporary merge branch 1";
 		opt->branch2 = "Temporary merge branch 2";
 		if (merge_recursive_internal(opt, merged_merge_bases, iter->item,
-					     NULL, &merged_merge_bases) < 0)
-			return -1;
+					     NULL, &merged_merge_bases) < 0) {
+			ret = -1;
+			goto out;
+		}
 		opt->branch1 = saved_b1;
 		opt->branch2 = saved_b2;
 		opt->priv->call_depth--;
 
-		if (!merged_merge_bases)
-			return err(opt, _("merge returned no commit"));
+		if (!merged_merge_bases) {
+			ret = err(opt, _("merge returned no commit"));
+			goto out;
+		}
 	}
 
 	/*
@@ -3720,17 +3736,16 @@ static int merge_recursive_internal(struct merge_options *opt,
 		repo_read_index(opt->repo);
 
 	opt->ancestor = ancestor_name;
-	clean = merge_trees_internal(opt,
-				     repo_get_commit_tree(opt->repo, h1),
-				     repo_get_commit_tree(opt->repo, h2),
-				     repo_get_commit_tree(opt->repo,
-							  merged_merge_bases),
-				     &result_tree);
-	strbuf_release(&merge_base_abbrev);
+	ret = merge_trees_internal(opt,
+				   repo_get_commit_tree(opt->repo, h1),
+				   repo_get_commit_tree(opt->repo, h2),
+				   repo_get_commit_tree(opt->repo,
+							merged_merge_bases),
+				   &result_tree);
 	opt->ancestor = NULL;  /* avoid accidental re-use of opt->ancestor */
-	if (clean < 0) {
+	if (ret < 0) {
 		flush_output(opt);
-		return clean;
+		goto out;
 	}
 
 	if (opt->priv->call_depth) {
@@ -3739,7 +3754,11 @@ static int merge_recursive_internal(struct merge_options *opt,
 		commit_list_insert(h1, &(*result)->parents);
 		commit_list_insert(h2, &(*result)->parents->next);
 	}
-	return clean;
+
+out:
+	strbuf_release(&merge_base_abbrev);
+	free_commit_list(merge_bases);
+	return ret;
 }
 
 static int merge_start(struct merge_options *opt, struct tree *head)
@@ -3794,6 +3813,9 @@ static void merge_finalize(struct merge_options *opt)
 	if (show(opt, 2))
 		diff_warn_rename_limit("merge.renamelimit",
 				       opt->priv->needed_rename_limit, 0);
+	hashmap_clear_and_free(&opt->priv->current_file_dir_set,
+			       struct path_hashmap_entry, e);
+	string_list_clear(&opt->priv->df_conflict_file_set, 0);
 	FREE_AND_NULL(opt->priv);
 }
 
@@ -3818,7 +3840,7 @@ int merge_trees(struct merge_options *opt,
 int merge_recursive(struct merge_options *opt,
 		    struct commit *h1,
 		    struct commit *h2,
-		    struct commit_list *merge_bases,
+		    const struct commit_list *merge_bases,
 		    struct commit **result)
 {
 	int clean;
@@ -3860,7 +3882,7 @@ int merge_recursive_generic(struct merge_options *opt,
 			    const struct object_id *head,
 			    const struct object_id *merge,
 			    int num_merge_bases,
-			    const struct object_id **merge_bases,
+			    const struct object_id *merge_bases,
 			    struct commit **result)
 {
 	int clean;
@@ -3873,10 +3895,10 @@ int merge_recursive_generic(struct merge_options *opt,
 		int i;
 		for (i = 0; i < num_merge_bases; ++i) {
 			struct commit *base;
-			if (!(base = get_ref(opt->repo, merge_bases[i],
-					     oid_to_hex(merge_bases[i]))))
+			if (!(base = get_ref(opt->repo, &merge_bases[i],
+					     oid_to_hex(&merge_bases[i]))))
 				return err(opt, _("Could not parse object '%s'"),
-					   oid_to_hex(merge_bases[i]));
+					   oid_to_hex(&merge_bases[i]));
 			commit_list_insert(base, &ca);
 		}
 		if (num_merge_bases == 1)
@@ -3886,6 +3908,7 @@ int merge_recursive_generic(struct merge_options *opt,
 	repo_hold_locked_index(opt->repo, &lock, LOCK_DIE_ON_ERROR);
 	clean = merge_recursive(opt, head_commit, next_commit, ca,
 				result);
+	free_commit_list(ca);
 	if (clean < 0) {
 		rollback_lock_file(&lock);
 		return clean;
@@ -3898,7 +3921,7 @@ int merge_recursive_generic(struct merge_options *opt,
 	return clean ? 0 : 1;
 }
 
-static void merge_recursive_config(struct merge_options *opt)
+static void merge_recursive_config(struct merge_options *opt, int ui)
 {
 	char *value = NULL;
 	int renormalize = 0;
@@ -3927,11 +3950,20 @@ static void merge_recursive_config(struct merge_options *opt)
 		} /* avoid erroring on values from future versions of git */
 		free(value);
 	}
+	if (ui) {
+		if (!git_config_get_string("diff.algorithm", &value)) {
+			long diff_algorithm = parse_algorithm_value(value);
+			if (diff_algorithm < 0)
+				die(_("unknown value for config '%s': %s"), "diff.algorithm", value);
+			opt->xdl_opts = (opt->xdl_opts & ~XDF_DIFF_ALGORITHM_MASK) | diff_algorithm;
+			free(value);
+		}
+	}
 	git_config(git_xmerge_config, NULL);
 }
 
-void init_merge_options(struct merge_options *opt,
-			struct repository *repo)
+static void init_merge_options(struct merge_options *opt,
+			struct repository *repo, int ui)
 {
 	const char *merge_verbosity;
 	memset(opt, 0, sizeof(struct merge_options));
@@ -3950,12 +3982,24 @@ void init_merge_options(struct merge_options *opt,
 
 	opt->conflict_style = -1;
 
-	merge_recursive_config(opt);
+	merge_recursive_config(opt, ui);
 	merge_verbosity = getenv("GIT_MERGE_VERBOSITY");
 	if (merge_verbosity)
 		opt->verbosity = strtol(merge_verbosity, NULL, 10);
 	if (opt->verbosity >= 5)
 		opt->buffer_output = 0;
+}
+
+void init_ui_merge_options(struct merge_options *opt,
+			struct repository *repo)
+{
+	init_merge_options(opt, repo, 1);
+}
+
+void init_basic_merge_options(struct merge_options *opt,
+			struct repository *repo)
+{
+	init_merge_options(opt, repo, 0);
 }
 
 /*

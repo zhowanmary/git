@@ -482,6 +482,7 @@ static int real_merge(struct merge_tree_options *o,
 			die(_("refusing to merge unrelated histories"));
 		merge_bases = reverse_commit_list(merge_bases);
 		merge_incore_recursive(&opt, merge_bases, parent1, parent2, &result);
+		free_commit_list(merge_bases);
 	}
 
 	if (result.clean < 0)
@@ -570,7 +571,7 @@ int cmd_merge_tree(int argc, const char **argv, const char *prefix)
 	};
 
 	/* Init merge options */
-	init_merge_options(&o.merge_options, the_repository);
+	init_ui_merge_options(&o.merge_options, the_repository);
 
 	/* Parse arguments */
 	original_argc = argc - 1; /* ignoring argv[0] */

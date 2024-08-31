@@ -1,3 +1,5 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "lockfile.h"
 #include "bundle.h"
@@ -87,7 +89,12 @@ int read_bundle_header_fd(int fd, struct bundle_header *header,
 		goto abort;
 	}
 
-	header->hash_algo = the_hash_algo;
+	/*
+	 * The default hash format for bundles is SHA1, unless told otherwise
+	 * by an "object-format=" capability, which is being handled in
+	 * `parse_capability()`.
+	 */
+	header->hash_algo = &hash_algos[GIT_HASH_SHA1];
 
 	/* The bundle header ends with an empty line */
 	while (!strbuf_getwholeline_fd(&buf, fd, '\n') &&
@@ -500,6 +507,7 @@ int create_bundle(struct repository *r, const char *path,
 	struct rev_info revs, revs_copy;
 	int min_version = 2;
 	struct bundle_prerequisites_info bpi;
+	int ret;
 	int i;
 
 	/* init revs to list objects for pack-objects later */
@@ -525,8 +533,8 @@ int create_bundle(struct repository *r, const char *path,
 		min_version = 3;
 
 	if (argc > 1) {
-		error(_("unrecognized argument: %s"), argv[1]);
-		goto err;
+		ret = error(_("unrecognized argument: %s"), argv[1]);
+		goto out;
 	}
 
 	bundle_to_stdout = !strcmp(path, "-");
@@ -591,23 +599,31 @@ int create_bundle(struct repository *r, const char *path,
 
 	/* write bundle refs */
 	ref_count = write_bundle_refs(bundle_fd, &revs_copy);
-	if (!ref_count)
+	if (!ref_count) {
 		die(_("Refusing to create empty bundle."));
-	else if (ref_count < 0)
-		goto err;
+	} else if (ref_count < 0) {
+		ret = -1;
+		goto out;
+	}
 
 	/* write pack */
-	if (write_pack_data(bundle_fd, &revs_copy, pack_options))
-		goto err;
+	if (write_pack_data(bundle_fd, &revs_copy, pack_options)) {
+		ret = -1;
+		goto out;
+	}
 
 	if (!bundle_to_stdout) {
 		if (commit_lock_file(&lock))
 			die_errno(_("cannot create '%s'"), path);
 	}
-	return 0;
-err:
+
+	ret = 0;
+
+out:
+	object_array_clear(&revs_copy.pending);
+	release_revisions(&revs);
 	rollback_lock_file(&lock);
-	return -1;
+	return ret;
 }
 
 int unbundle(struct repository *r, struct bundle_header *header,
@@ -624,6 +640,9 @@ int unbundle(struct repository *r, struct bundle_header *header,
 	/* If there is a filter, then we need to create the promisor pack. */
 	if (header->filter.choice)
 		strvec_push(&ip.args, "--promisor=from-bundle");
+
+	if (flags & VERIFY_BUNDLE_FSCK)
+		strvec_push(&ip.args, "--fsck-objects");
 
 	if (extra_index_pack_args) {
 		strvec_pushv(&ip.args, extra_index_pack_args->v);

@@ -26,16 +26,18 @@ enum fetch_negotiation_setting {
 	FETCH_NEGOTIATION_NOOP,
 };
 
-#define REF_STORAGE_FORMAT_UNKNOWN  0
-#define REF_STORAGE_FORMAT_FILES    1
-#define REF_STORAGE_FORMAT_REFTABLE 2
+enum ref_storage_format {
+	REF_STORAGE_FORMAT_UNKNOWN,
+	REF_STORAGE_FORMAT_FILES,
+	REF_STORAGE_FORMAT_REFTABLE,
+};
 
 struct repo_settings {
 	int initialized;
 
 	int core_commit_graph;
 	int commit_graph_generation_version;
-	int commit_graph_read_changed_paths;
+	int commit_graph_changed_paths_version;
 	int gc_write_commit_graph;
 	int fetch_write_commit_graph;
 	int command_requires_full_index;
@@ -181,7 +183,7 @@ struct repository {
 	const struct git_hash_algo *compat_hash_algo;
 
 	/* Repository's reference storage format, as serialized on disk. */
-	unsigned int ref_storage_format;
+	enum ref_storage_format ref_storage_format;
 
 	/* A unique-id for tracing purposes. */
 	int trace2_repo_id;
@@ -200,7 +202,9 @@ struct repository {
 	unsigned different_commondir:1;
 };
 
+#ifdef USE_THE_REPOSITORY_VARIABLE
 extern struct repository *the_repository;
+#endif
 
 /*
  * Define a custom repository layout. Any field can be NULL, which
@@ -220,7 +224,8 @@ void repo_set_gitdir(struct repository *repo, const char *root,
 void repo_set_worktree(struct repository *repo, const char *path);
 void repo_set_hash_algo(struct repository *repo, int algo);
 void repo_set_compat_hash_algo(struct repository *repo, int compat_algo);
-void repo_set_ref_storage_format(struct repository *repo, unsigned int format);
+void repo_set_ref_storage_format(struct repository *repo,
+				 enum ref_storage_format format);
 void initialize_repository(struct repository *repo);
 RESULT_MUST_BE_USED
 int repo_init(struct repository *r, const char *gitdir, const char *worktree);

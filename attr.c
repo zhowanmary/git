@@ -6,6 +6,8 @@
  * an insanely large number of attributes.
  */
 
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "config.h"
 #include "environment.h"
@@ -865,7 +867,8 @@ static struct attr_stack *read_attr_from_index(struct index_state *istate,
 		stack = read_attr_from_blob(istate, &istate->cache[sparse_dir_pos]->oid, relative_path, flags);
 	} else {
 		buf = read_blob_data_from_index(istate, path, &size);
-		stack = read_attr_from_buf(buf, size, path, flags);
+		if (buf)
+			stack = read_attr_from_buf(buf, size, path, flags);
 	}
 	return stack;
 }

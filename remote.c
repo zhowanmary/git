@@ -1,3 +1,5 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "abspath.h"
 #include "config.h"
@@ -32,10 +34,10 @@ struct counted_string {
 
 static int valid_remote(const struct remote *remote)
 {
-	return (!!remote->url) || (!!remote->foreign_vcs);
+	return !!remote->url.nr;
 }
 
-static const char *alias_url(const char *url, struct rewrites *r)
+static char *alias_url(const char *url, struct rewrites *r)
 {
 	int i, j;
 	struct counted_string *longest;
@@ -56,36 +58,43 @@ static const char *alias_url(const char *url, struct rewrites *r)
 		}
 	}
 	if (!longest)
-		return url;
+		return NULL;
 
 	return xstrfmt("%s%s", r->rewrite[longest_i]->base, url + longest->len);
 }
 
 static void add_url(struct remote *remote, const char *url)
 {
-	ALLOC_GROW(remote->url, remote->url_nr + 1, remote->url_alloc);
-	remote->url[remote->url_nr++] = url;
+	if (*url)
+		strvec_push(&remote->url, url);
+	else
+		strvec_clear(&remote->url);
 }
 
 static void add_pushurl(struct remote *remote, const char *pushurl)
 {
-	ALLOC_GROW(remote->pushurl, remote->pushurl_nr + 1, remote->pushurl_alloc);
-	remote->pushurl[remote->pushurl_nr++] = pushurl;
+	if (*pushurl)
+		strvec_push(&remote->pushurl, pushurl);
+	else
+		strvec_clear(&remote->pushurl);
 }
 
 static void add_pushurl_alias(struct remote_state *remote_state,
 			      struct remote *remote, const char *url)
 {
-	const char *pushurl = alias_url(url, &remote_state->rewrites_push);
-	if (pushurl != url)
-		add_pushurl(remote, pushurl);
+	char *alias = alias_url(url, &remote_state->rewrites_push);
+	if (alias)
+		add_pushurl(remote, alias);
+	free(alias);
 }
 
 static void add_url_alias(struct remote_state *remote_state,
 			  struct remote *remote, const char *url)
 {
-	add_url(remote, alias_url(url, &remote_state->rewrites));
+	char *alias = alias_url(url, &remote_state->rewrites);
+	add_url(remote, alias ? alias : url);
 	add_pushurl_alias(remote_state, remote, url);
+	free(alias);
 }
 
 struct remotes_hash_key {
@@ -147,18 +156,12 @@ static struct remote *make_remote(struct remote_state *remote_state,
 
 static void remote_clear(struct remote *remote)
 {
-	int i;
-
 	free((char *)remote->name);
 	free((char *)remote->foreign_vcs);
 
-	for (i = 0; i < remote->url_nr; i++)
-		free((char *)remote->url[i]);
-	FREE_AND_NULL(remote->url);
+	strvec_clear(&remote->url);
+	strvec_clear(&remote->pushurl);
 
-	for (i = 0; i < remote->pushurl_nr; i++)
-		free((char *)remote->pushurl[i]);
-	FREE_AND_NULL(remote->pushurl);
 	free((char *)remote->receivepack);
 	free((char *)remote->uploadpack);
 	FREE_AND_NULL(remote->http_proxy);
@@ -292,7 +295,7 @@ static void read_remotes_file(struct remote_state *remote_state,
 
 		if (skip_prefix(buf.buf, "URL:", &v))
 			add_url_alias(remote_state, remote,
-				      xstrdup(skip_spaces(v)));
+				      skip_spaces(v));
 		else if (skip_prefix(buf.buf, "Push:", &v))
 			refspec_append(&remote->push, skip_spaces(v));
 		else if (skip_prefix(buf.buf, "Pull:", &v))
@@ -335,7 +338,7 @@ static void read_branches_file(struct remote_state *remote_state,
 	else
 		frag = to_free = repo_default_branch_name(the_repository, 0);
 
-	add_url_alias(remote_state, remote, strbuf_detach(&buf, NULL));
+	add_url_alias(remote_state, remote, buf.buf);
 	refspec_appendf(&remote->fetch, "refs/heads/%s:refs/heads/%s",
 			frag, remote->name);
 
@@ -346,6 +349,7 @@ static void read_branches_file(struct remote_state *remote_state,
 	refspec_appendf(&remote->push, "HEAD:refs/heads/%s", frag);
 	remote->fetch_tags = 1; /* always auto-follow */
 
+	strbuf_release(&buf);
 	free(to_free);
 }
 
@@ -430,15 +434,13 @@ static int handle_config(const char *key, const char *value,
 	else if (!strcmp(subkey, "prunetags"))
 		remote->prune_tags = git_config_bool(key, value);
 	else if (!strcmp(subkey, "url")) {
-		char *v;
-		if (git_config_string(&v, key, value))
-			return -1;
-		add_url(remote, v);
+		if (!value)
+			return config_error_nonbool(key);
+		add_url(remote, value);
 	} else if (!strcmp(subkey, "pushurl")) {
-		char *v;
-		if (git_config_string(&v, key, value))
-			return -1;
-		add_pushurl(remote, v);
+		if (!value)
+			return config_error_nonbool(key);
+		add_pushurl(remote, value);
 	} else if (!strcmp(subkey, "push")) {
 		char *v;
 		if (git_config_string(&v, key, value))
@@ -491,20 +493,27 @@ static void alias_all_urls(struct remote_state *remote_state)
 		int add_pushurl_aliases;
 		if (!remote_state->remotes[i])
 			continue;
-		for (j = 0; j < remote_state->remotes[i]->pushurl_nr; j++) {
-			remote_state->remotes[i]->pushurl[j] =
-				alias_url(remote_state->remotes[i]->pushurl[j],
-					  &remote_state->rewrites);
+		for (j = 0; j < remote_state->remotes[i]->pushurl.nr; j++) {
+			char *alias = alias_url(remote_state->remotes[i]->pushurl.v[j],
+						&remote_state->rewrites);
+			if (alias)
+				strvec_replace(&remote_state->remotes[i]->pushurl,
+					       j, alias);
+			free(alias);
 		}
-		add_pushurl_aliases = remote_state->remotes[i]->pushurl_nr == 0;
-		for (j = 0; j < remote_state->remotes[i]->url_nr; j++) {
+		add_pushurl_aliases = remote_state->remotes[i]->pushurl.nr == 0;
+		for (j = 0; j < remote_state->remotes[i]->url.nr; j++) {
+			char *alias;
 			if (add_pushurl_aliases)
 				add_pushurl_alias(
 					remote_state, remote_state->remotes[i],
-					remote_state->remotes[i]->url[j]);
-			remote_state->remotes[i]->url[j] =
-				alias_url(remote_state->remotes[i]->url[j],
+					remote_state->remotes[i]->url.v[j]);
+			alias = alias_url(remote_state->remotes[i]->url.v[j],
 					  &remote_state->rewrites);
+			if (alias)
+				strvec_replace(&remote_state->remotes[i]->url,
+					       j, alias);
+			free(alias);
 		}
 	}
 }
@@ -644,10 +653,10 @@ static void validate_remote_url(struct remote *remote)
 	else
 		die(_("unrecognized value transfer.credentialsInUrl: '%s'"), value);
 
-	for (i = 0; i < remote->url_nr; i++) {
+	for (i = 0; i < remote->url.nr; i++) {
 		struct url_info url_info = { 0 };
 
-		if (!url_normalize(remote->url[i], &url_info) ||
+		if (!url_normalize(remote->url.v[i], &url_info) ||
 		    !url_info.passwd_off)
 			goto loop_cleanup;
 
@@ -821,11 +830,16 @@ struct ref *ref_remove_duplicates(struct ref *ref_map)
 int remote_has_url(struct remote *remote, const char *url)
 {
 	int i;
-	for (i = 0; i < remote->url_nr; i++) {
-		if (!strcmp(remote->url[i], url))
+	for (i = 0; i < remote->url.nr; i++) {
+		if (!strcmp(remote->url.v[i], url))
 			return 1;
 	}
 	return 0;
+}
+
+struct strvec *push_url_of_remote(struct remote *remote)
+{
+	return remote->pushurl.nr ? &remote->pushurl : &remote->url;
 }
 
 static int match_name_with_pattern(const char *key, const char *name,
@@ -1164,7 +1178,7 @@ static void tail_link_ref(struct ref *ref, struct ref ***tail)
 static struct ref *alloc_delete_ref(void)
 {
 	struct ref *ref = alloc_ref("(delete)");
-	oidclr(&ref->new_oid);
+	oidclr(&ref->new_oid, the_repository->hash_algo);
 	return ref;
 }
 
@@ -2342,7 +2356,7 @@ int format_tracking_info(struct branch *branch, struct strbuf *sb,
 	return 1;
 }
 
-static int one_local_ref(const char *refname, const struct object_id *oid,
+static int one_local_ref(const char *refname, const char *referent UNUSED, const struct object_id *oid,
 			 int flag UNUSED,
 			 void *cb_data)
 {
@@ -2427,7 +2441,7 @@ struct stale_heads_info {
 	struct refspec *rs;
 };
 
-static int get_stale_heads_cb(const char *refname, const struct object_id *oid,
+static int get_stale_heads_cb(const char *refname, const char *referent UNUSED, const struct object_id *oid,
 			      int flags, void *cb_data)
 {
 	struct stale_heads_info *info = cb_data;
@@ -2531,7 +2545,7 @@ static int parse_push_cas_option(struct push_cas_option *cas, const char *arg, i
 	if (!*colon)
 		entry->use_tracking = 1;
 	else if (!colon[1])
-		oidclr(&entry->expect);
+		oidclr(&entry->expect, the_repository->hash_algo);
 	else if (repo_get_oid(the_repository, colon + 1, &entry->expect))
 		return error(_("cannot parse expected object name '%s'"),
 			     colon + 1);
@@ -2733,7 +2747,7 @@ static void apply_cas(struct push_cas_option *cas,
 		else if (remote_tracking(remote, ref->name,
 					 &ref->old_oid_expect,
 					 &ref->tracking_ref))
-			oidclr(&ref->old_oid_expect);
+			oidclr(&ref->old_oid_expect, the_repository->hash_algo);
 		else
 			ref->check_reachable = cas->use_force_if_includes;
 		return;
@@ -2747,7 +2761,7 @@ static void apply_cas(struct push_cas_option *cas,
 	if (remote_tracking(remote, ref->name,
 			    &ref->old_oid_expect,
 			    &ref->tracking_ref))
-		oidclr(&ref->old_oid_expect);
+		oidclr(&ref->old_oid_expect, the_repository->hash_algo);
 	else
 		ref->check_reachable = cas->use_force_if_includes;
 }

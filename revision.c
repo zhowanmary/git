@@ -1,3 +1,5 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "config.h"
 #include "environment.h"
@@ -29,6 +31,7 @@
 #include "bisect.h"
 #include "packfile.h"
 #include "worktree.h"
+#include "path.h"
 #include "read-cache.h"
 #include "setup.h"
 #include "sparse-index.h"
@@ -844,16 +847,27 @@ static int rev_compare_tree(struct rev_info *revs,
 	return tree_difference;
 }
 
-static int rev_same_tree_as_empty(struct rev_info *revs, struct commit *commit)
+static int rev_same_tree_as_empty(struct rev_info *revs, struct commit *commit,
+				  int nth_parent)
 {
 	struct tree *t1 = repo_get_commit_tree(the_repository, commit);
+	int bloom_ret = -1;
 
 	if (!t1)
 		return 0;
 
+	if (!nth_parent && revs->bloom_keys_nr) {
+		bloom_ret = check_maybe_different_in_bloom_filter(revs, commit);
+		if (!bloom_ret)
+			return 1;
+	}
+
 	tree_difference = REV_TREE_SAME;
 	revs->pruning.flags.has_changes = 0;
 	diff_tree_oid(NULL, &t1->object.oid, "", &revs->pruning);
+
+	if (bloom_ret == 1 && tree_difference == REV_TREE_SAME)
+		count_bloom_filter_false_positive++;
 
 	return tree_difference == REV_TREE_SAME;
 }
@@ -892,7 +906,7 @@ static int compact_treesame(struct rev_info *revs, struct commit *commit, unsign
 		if (nth_parent != 0)
 			die("compact_treesame %u", nth_parent);
 		old_same = !!(commit->object.flags & TREESAME);
-		if (rev_same_tree_as_empty(revs, commit))
+		if (rev_same_tree_as_empty(revs, commit, nth_parent))
 			commit->object.flags |= TREESAME;
 		else
 			commit->object.flags &= ~TREESAME;
@@ -988,7 +1002,14 @@ static void try_to_simplify_commit(struct rev_info *revs, struct commit *commit)
 		return;
 
 	if (!commit->parents) {
-		if (rev_same_tree_as_empty(revs, commit))
+		/*
+		 * Pretend as if we are comparing ourselves to the
+		 * (non-existent) first parent of this commit object. Even
+		 * though no such parent exists, its changed-path Bloom filter
+		 * (if one exists) is relative to the empty tree, using Bloom
+		 * filters is allowed here.
+		 */
+		if (rev_same_tree_as_empty(revs, commit, 0))
 			commit->object.flags |= TREESAME;
 		return;
 	}
@@ -1069,7 +1090,7 @@ static void try_to_simplify_commit(struct rev_info *revs, struct commit *commit)
 
 		case REV_TREE_NEW:
 			if (revs->remove_empty_trees &&
-			    rev_same_tree_as_empty(revs, p)) {
+			    rev_same_tree_as_empty(revs, p, nth_parent)) {
 				/* We are adding all the specified
 				 * paths from this parent, so the
 				 * history beyond this parent is not
@@ -1627,7 +1648,7 @@ struct all_refs_cb {
 	struct worktree *wt;
 };
 
-static int handle_one_ref(const char *path, const struct object_id *oid,
+static int handle_one_ref(const char *path, const char *referent UNUSED, const struct object_id *oid,
 			  int flag UNUSED,
 			  void *cb_data)
 {
@@ -1851,7 +1872,7 @@ void add_index_objects_to_pending(struct rev_info *revs, unsigned int flags)
 			continue; /* current index already taken care of */
 
 		if (read_index_from(&istate,
-				    worktree_git_path(wt, "index"),
+				    worktree_git_path(the_repository, wt, "index"),
 				    get_worktree_git_dir(wt)) > 0)
 			do_add_index_objects_to_pending(revs, &istate, flags);
 		discard_index(&istate);
@@ -2130,30 +2151,26 @@ static int handle_dotdot(const char *arg,
 			 struct rev_info *revs, int flags,
 			 int cant_be_filename)
 {
-	struct object_context a_oc, b_oc;
+	struct object_context a_oc = {0}, b_oc = {0};
 	char *dotdot = strstr(arg, "..");
 	int ret;
 
 	if (!dotdot)
 		return -1;
 
-	memset(&a_oc, 0, sizeof(a_oc));
-	memset(&b_oc, 0, sizeof(b_oc));
-
 	*dotdot = '\0';
 	ret = handle_dotdot_1(arg, dotdot, revs, flags, cant_be_filename,
 			      &a_oc, &b_oc);
 	*dotdot = '.';
 
-	free(a_oc.path);
-	free(b_oc.path);
-
+	object_context_release(&a_oc);
+	object_context_release(&b_oc);
 	return ret;
 }
 
 static int handle_revision_arg_1(const char *arg_, struct rev_info *revs, int flags, unsigned revarg_opt)
 {
-	struct object_context oc;
+	struct object_context oc = {0};
 	char *mark;
 	struct object *object;
 	struct object_id oid;
@@ -2161,6 +2178,7 @@ static int handle_revision_arg_1(const char *arg_, struct rev_info *revs, int fl
 	const char *arg = arg_;
 	int cant_be_filename = revarg_opt & REVARG_CANNOT_BE_FILENAME;
 	unsigned get_sha1_flags = GET_OID_RECORD_PATH;
+	int ret;
 
 	flags = flags & UNINTERESTING ? flags | BOTTOM : flags & ~BOTTOM;
 
@@ -2169,17 +2187,22 @@ static int handle_revision_arg_1(const char *arg_, struct rev_info *revs, int fl
 		 * Just ".."?  That is not a range but the
 		 * pathspec for the parent directory.
 		 */
-		return -1;
+		ret = -1;
+		goto out;
 	}
 
-	if (!handle_dotdot(arg, revs, flags, revarg_opt))
-		return 0;
+	if (!handle_dotdot(arg, revs, flags, revarg_opt)) {
+		ret = 0;
+		goto out;
+	}
 
 	mark = strstr(arg, "^@");
 	if (mark && !mark[2]) {
 		*mark = 0;
-		if (add_parents_only(revs, arg, flags, 0))
-			return 0;
+		if (add_parents_only(revs, arg, flags, 0)) {
+			ret = 0;
+			goto out;
+		}
 		*mark = '^';
 	}
 	mark = strstr(arg, "^!");
@@ -2194,8 +2217,10 @@ static int handle_revision_arg_1(const char *arg_, struct rev_info *revs, int fl
 
 		if (mark[2]) {
 			if (strtol_i(mark + 2, 10, &exclude_parent) ||
-			    exclude_parent < 1)
-				return -1;
+			    exclude_parent < 1) {
+				ret = -1;
+				goto out;
+			}
 		}
 
 		*mark = 0;
@@ -2217,17 +2242,25 @@ static int handle_revision_arg_1(const char *arg_, struct rev_info *revs, int fl
 	 * should error out if we can't even get an oid, as
 	 * `--missing=print` should be able to report missing oids.
 	 */
-	if (get_oid_with_context(revs->repo, arg, get_sha1_flags, &oid, &oc))
-		return revs->ignore_missing ? 0 : -1;
+	if (get_oid_with_context(revs->repo, arg, get_sha1_flags, &oid, &oc)) {
+		ret = revs->ignore_missing ? 0 : -1;
+		goto out;
+	}
 	if (!cant_be_filename)
 		verify_non_filename(revs->prefix, arg);
 	object = get_reference(revs, arg, &oid, flags ^ local_flags);
-	if (!object)
-		return (revs->ignore_missing || revs->do_not_die_on_missing_objects) ? 0 : -1;
+	if (!object) {
+		ret = (revs->ignore_missing || revs->do_not_die_on_missing_objects) ? 0 : -1;
+		goto out;
+	}
 	add_rev_cmdline(revs, object, arg_, REV_CMD_REV, flags ^ local_flags);
 	add_pending_object_with_path(revs, object, arg, oc.mode, oc.path);
-	free(oc.path);
-	return 0;
+
+	ret = 0;
+
+out:
+	object_context_release(&oc);
+	return ret;
 }
 
 int handle_revision_arg(const char *arg, struct rev_info *revs, int flags, unsigned revarg_opt)
@@ -2650,10 +2683,11 @@ static int handle_revision_opt(struct rev_info *revs, int argc, const char **arg
 	} else if (!strcmp(arg, "--invert-grep")) {
 		revs->grep_filter.no_body_match = 1;
 	} else if ((argcount = parse_long_opt("encoding", argv, &optarg))) {
+		free(git_log_output_encoding);
 		if (strcmp(optarg, "none"))
 			git_log_output_encoding = xstrdup(optarg);
 		else
-			git_log_output_encoding = "";
+			git_log_output_encoding = xstrdup("");
 		return argcount;
 	} else if (!strcmp(arg, "--reverse")) {
 		revs->reverse ^= 1;
@@ -3062,6 +3096,7 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, struct s
 			diagnose_missing_default(revs->def);
 		object = get_reference(revs, revs->def, &oid, 0);
 		add_pending_object_with_mode(revs, object, revs->def, oc.mode);
+		object_context_release(&oc);
 	}
 
 	/* Did the user ask for any diff output? Run the diff! */
@@ -3168,6 +3203,7 @@ void release_revisions(struct rev_info *revs)
 {
 	free_commit_list(revs->commits);
 	free_commit_list(revs->ancestry_path_bottoms);
+	release_display_notes(&revs->notes_opt);
 	object_array_clear(&revs->pending);
 	object_array_clear(&revs->boundary_commits);
 	release_revisions_cmdline(&revs->cmdline);
@@ -3177,7 +3213,7 @@ void release_revisions(struct rev_info *revs)
 	release_revisions_mailmap(revs->mailmap);
 	free_grep_patterns(&revs->grep_filter);
 	graph_clear(revs->graph);
-	/* TODO (need to handle "no_free"): diff_free(&revs->diffopt) */
+	diff_free(&revs->diffopt);
 	diff_free(&revs->pruning);
 	reflog_walk_info_release(revs->reflog_info);
 	release_revisions_topo_walk_info(revs->topo_walk_info);
@@ -4430,6 +4466,7 @@ struct commit *get_revision(struct rev_info *revs)
 		reversed = NULL;
 		while ((c = get_revision_internal(revs)))
 			commit_list_insert(c, &reversed);
+		free_commit_list(revs->commits);
 		revs->commits = reversed;
 		revs->reverse = 0;
 		revs->reverse_output_stage = 1;

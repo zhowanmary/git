@@ -11,6 +11,7 @@ among other things.
 GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME=main
 export GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME
 
+TEST_PASSES_SANITIZE_LEAK=true
 . ./test-lib.sh
 
 GIT_AUTHOR_NAME=author@name
@@ -231,6 +232,12 @@ test_expect_success 'rebase --apply -q is quiet' '
 test_expect_success 'rebase --merge -q is quiet' '
 	git checkout -B quiet topic &&
 	git rebase --merge -q main >output.out 2>&1 &&
+	test_must_be_empty output.out
+'
+
+test_expect_success 'rebase --exec -q is quiet' '
+	git checkout -B quiet topic &&
+	git rebase --exec true -q main >output.out 2>&1 &&
 	test_must_be_empty output.out
 '
 

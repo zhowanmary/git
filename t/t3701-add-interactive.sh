@@ -43,21 +43,6 @@ force_color () {
 	)
 }
 
-test_expect_success 'warn about add.interactive.useBuiltin' '
-	cat >expect <<-\EOF &&
-	warning: the add.interactive.useBuiltin setting has been removed!
-	See its entry in '\''git help config'\'' for details.
-	EOF
-	echo "No changes." >expect.out &&
-
-	for v in = =true =false
-	do
-		git -c "add.interactive.useBuiltin$v" add -p >out 2>actual &&
-		test_cmp expect.out out &&
-		test_cmp expect actual || return 1
-	done
-'
-
 test_expect_success 'unknown command' '
 	test_when_finished "git reset --hard; rm -f command" &&
 	echo W >command &&
@@ -588,6 +573,54 @@ test_expect_success 'navigate to hunk via regex / pattern' '
 	test_write_lines s y / 1,2 | git add -p >actual &&
 	tail -n 4 <actual >actual.trimmed &&
 	test_cmp expect actual.trimmed
+'
+
+test_expect_success 'print again the hunk' '
+	test_when_finished "git reset" &&
+	tr _ " " >expect <<-EOF &&
+	+15
+	 20
+	(1/2) Stage this hunk [y,n,q,a,d,j,J,g,/,e,p,?]? @@ -1,2 +1,3 @@
+	 10
+	+15
+	 20
+	(1/2) Stage this hunk [y,n,q,a,d,j,J,g,/,e,p,?]?_
+	EOF
+	test_write_lines s y g 1 p | git add -p >actual &&
+	tail -n 7 <actual >actual.trimmed &&
+	test_cmp expect actual.trimmed
+'
+
+test_expect_success TTY 'print again the hunk (PAGER)' '
+	test_when_finished "git reset" &&
+	cat >expect <<-EOF &&
+	<GREEN>+<RESET><GREEN>15<RESET>
+	 20<RESET>
+	<BOLD;BLUE>(1/2) Stage this hunk [y,n,q,a,d,j,J,g,/,e,p,?]? <RESET>PAGER <CYAN>@@ -1,2 +1,3 @@<RESET>
+	PAGER  10<RESET>
+	PAGER <GREEN>+<RESET><GREEN>15<RESET>
+	PAGER  20<RESET>
+	<BOLD;BLUE>(1/2) Stage this hunk [y,n,q,a,d,j,J,g,/,e,p,?]? <RESET>
+	EOF
+	test_write_lines s y g 1 P |
+	(
+		GIT_PAGER="sed s/^/PAGER\ /" &&
+		export GIT_PAGER &&
+		test_terminal git add -p >actual
+	) &&
+	tail -n 7 <actual | test_decode_color >actual.trimmed &&
+	test_cmp expect actual.trimmed
+'
+
+test_expect_success TTY 'P handles SIGPIPE when writing to pager' '
+	test_when_finished "rm -f huge_file; git reset" &&
+	printf "\n%2500000s" Y >huge_file &&
+	git add -N huge_file &&
+	test_write_lines P q | (
+		GIT_PAGER="head -n 1" &&
+		export GIT_PAGER &&
+		test_terminal git add -p
+	)
 '
 
 test_expect_success 'split hunk "add -p (edit)"' '
@@ -1177,6 +1210,25 @@ test_expect_success 'reset -p with unmerged files' '
 	printf "%s\n" y y | git reset -p &&
 	git diff-index --cached --diff-filter=u HEAD >staged &&
 	test_must_be_empty staged
+'
+
+test_expect_success 'hunk splitting works with diff.suppressBlankEmpty' '
+	test_config diff.suppressBlankEmpty true &&
+	write_script fake-editor.sh <<-\EOF &&
+	tr F G <"$1" >"$1.tmp" &&
+	mv "$1.tmp" "$1"
+	EOF
+
+	test_write_lines a b "" c d  "" e f "" >file &&
+	git add file &&
+	test_write_lines A b "" c D  "" e F "" >file &&
+	(
+		test_set_editor "$(pwd)/fake-editor.sh" &&
+		test_write_lines s n y e q | git add -p file
+	) &&
+	git cat-file blob :file >actual &&
+	test_write_lines a b "" c D "" e G "" >expect &&
+	test_cmp expect actual
 '
 
 test_done

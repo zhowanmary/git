@@ -1,3 +1,5 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "advice.h"
 #include "config.h"
@@ -184,7 +186,8 @@ static int fetch_refs_from_bundle(struct transport *transport,
 	if (!data->get_refs_from_bundle_called)
 		get_refs_from_bundle_inner(transport);
 	ret = unbundle(the_repository, &data->header, data->fd,
-		       &extra_index_pack_args, 0);
+		       &extra_index_pack_args,
+		       fetch_pack_fsck_objects() ? VERIFY_BUNDLE_FSCK : 0);
 	transport->hash_algo = data->header.hash_algo;
 	return ret;
 }
@@ -1112,6 +1115,8 @@ static struct transport_vtable builtin_smart_vtable = {
 struct transport *transport_get(struct remote *remote, const char *url)
 {
 	const char *helper;
+	char *helper_to_free = NULL;
+	const char *p;
 	struct transport *ret = xcalloc(1, sizeof(*ret));
 
 	ret->progress = isatty(2);
@@ -1127,22 +1132,19 @@ struct transport *transport_get(struct remote *remote, const char *url)
 	ret->remote = remote;
 	helper = remote->foreign_vcs;
 
-	if (!url && remote->url)
-		url = remote->url[0];
+	if (!url)
+		url = remote->url.v[0];
 	ret->url = url;
 
-	/* maybe it is a foreign URL? */
-	if (url) {
-		const char *p = url;
-
-		while (is_urlschemechar(p == url, *p))
-			p++;
-		if (starts_with(p, "::"))
-			helper = xstrndup(url, p - url);
-	}
+	p = url;
+	while (is_urlschemechar(p == url, *p))
+		p++;
+	if (starts_with(p, "::"))
+		helper = helper_to_free = xstrndup(url, p - url);
 
 	if (helper) {
 		transport_helper_init(ret, helper);
+		free(helper_to_free);
 	} else if (starts_with(url, "rsync:")) {
 		die(_("git-over-rsync is no longer supported"));
 	} else if (url_is_local_not_ssh(url) && is_file(url) && is_bundle(url, 1)) {
@@ -1271,7 +1273,7 @@ static int run_pre_push_hook(struct transport *transport,
 	struct ref *r;
 	struct child_process proc = CHILD_PROCESS_INIT;
 	struct strbuf buf;
-	const char *hook_path = find_hook("pre-push");
+	const char *hook_path = find_hook(the_repository, "pre-push");
 
 	if (!hook_path)
 		return 0;
